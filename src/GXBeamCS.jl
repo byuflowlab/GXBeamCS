@@ -9,15 +9,15 @@ using LinearAlgebra
 
 # from common
 export Material, MaterialPlane, Layer
+export compliance_matrix, mass_matrix, strains_and_stresses, tsai_wu
 
 # from fem
 export Node, MeshElement
-export initialize_cache, compliance_matrix, mass_matrix, plotmesh
-export strain_recovery, plotsoln, tsai_wu
+export initialize_cache, plotmesh
+export plotsoln
 
 # from clt
-export MaterialPlane, BeamSection
-export beamstiffness
+export BeamSection
 
 # from afmesh
 export afmesh
