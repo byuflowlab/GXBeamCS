@@ -185,7 +185,7 @@ end
 
 
 """
-    tsai_wu(stress_p, elements)
+    tsai_wu(stress_p, ::CompositeSectionAnalysis)
 
 Tsai Wu failure criteria
 
@@ -198,3 +198,22 @@ Tsai Wu failure criteria
 function tsai_wu(stress_p, ::CompositeSectionAnalysis)
     return zeros(1)
 end
+
+
+
+"""
+    plotgeometry(::CompositeSectionAnalysis, pyplot; plotnumbers=false)
+
+plot geometry for a quick visualization.
+Need to pass in a PyPlot object as PyPlot is not loaded by this package.
+"""
+function plotgeometry(fem::FEM, pyplot; plotnumbers=false) end
+
+"""
+    plotsoln(::CompositeSectionAnalysis, soln, pyplot)
+
+plot stress/strain on mesh
+soln could be any vector that is of appropriate length for the analysis method, e.g., sigma_b[3, :]
+Need to pass in a PyPlot object as PyPlot is not loaded by this package.
+"""
+function plotsoln(::CompositeSectionAnalysis, soln, pyplot) end
