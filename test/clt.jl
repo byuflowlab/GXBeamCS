@@ -607,6 +607,7 @@ EA, EIyy, EIzz, EIyz, GJ = GXBeamCS.beamstiffnessold([b])
 
 # S, K, _ = beamstiffness(sections)
 clt = CLT(sections)
+shear_center = false
 S, _, _ = compliance_matrix(clt, shear_center)
 K, _ = stiffness_in_internal_order(S)
 
@@ -645,6 +646,7 @@ b = BeamSection(laminate, [0.0; 50e-3; 50e-3; 0.0; 0.0], [0.0; 0.0; 70e-3; 70e-3
 
 # S, K = beamstiffness([b])
 clt = CLT([b])
+shear_center = false
 S, _, _ = compliance_matrix(clt, shear_center)
 _, S = stiffness_in_internal_order(S)
 @test isapprox(S[1, 1]/1e-6, 0.02576, atol=1e-5)
@@ -673,7 +675,7 @@ end
 
 # ----- example 6.6 / Appendix A1 and A.8 ------
 
-@testset "Beam shear flow test 6.6" begin
+@testset "Beam shear flow test 6.6 and A7" begin
 
 m0, t0, m45, t45 = beam_test_material()
 
@@ -689,6 +691,7 @@ sections = [b]
 # W, P, yc, zc = beamstiffness(sections, closedsection=false)
 closed_section = false
 clt = CLT(sections, closed_section)
+shear_center = false
 W, sc, tc = compliance_matrix(clt, shear_center)
 K, _ = stiffness_in_internal_order(W)
 
@@ -721,13 +724,10 @@ syz = 0.0
 @test isapprox(szz/1e-7, s[2, 2]/1e-7, atol=0.1)
 @test isapprox(syz/1e-7, s[1, 2]/1e-7, atol=1e-6)
 
-end
+
 
 # ---- appendix A.7
 
-@testset "Beam shear flow test A7" begin
-
-m0, t0, m45, t45 = beam_test_material()
 
 t = [t45*ones(2); t0*ones(12); t45*ones(2)]
 theta = [0; 0; zeros(12); 0; 0]*pi/180
@@ -738,7 +738,9 @@ df = 2.0
 d = 4.0
 b = BeamSection(laminate, [0.0; df; df; 0.0; 0.0], [0.0; 0.0; d; d; 0.0])
 # W, P, yc, zc = beamstiffness([b])
+closed_section = false
 clt = CLT([b], closed_section)
+shear_center = false
 W, _, tc = compliance_matrix(clt, shear_center)
 P, _ = stiffness_in_internal_order(W)
 yc = tc[1]; zc = tc[2]
