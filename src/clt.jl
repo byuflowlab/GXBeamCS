@@ -62,7 +62,7 @@ end
 """
 Compute the A, B, D stiffness matrices for a thin laminate
 """
-function stiffnessmatrix(laminate, z)
+function laminatestiffnessmatrix(laminate, z)
     A = Symmetric(zeros(3, 3))
     B = Symmetric(zeros(3, 3))
     D = Symmetric(zeros(3, 3))
@@ -81,7 +81,7 @@ end
 """
 Compute the alpha, beta, delta compliance matrices for a thin laminate given the stiffness matrices
 """
-function compliancematrix(A, B, D)
+function laminatecompliancematrix(A, B, D)
     Ainv = inv(A)
     Hinv = Symmetric(inv(D - B*Ainv*B))
     alpha = Symmetric(Ainv + Ainv*B*Hinv*B*Ainv)
@@ -96,8 +96,8 @@ convenicne method to go from laminate definition to its compliance matrices
 """
 function laminatecompliance(laminate)
     z, h = zspacing(laminate)
-    A, B, D = stiffnessmatrix(laminate, z)
-    alpha, beta, delta = compliancematrix(A, B, D)
+    A, B, D = laminatestiffnessmatrix(laminate, z)
+    alpha, beta, delta = laminatecompliancematrix(A, B, D)
     return alpha, beta, delta
 end
 
@@ -162,8 +162,8 @@ end
 function clt(laminate, forces)
 
     z, h = zspacing(laminate)
-    A, B, D = stiffnessmatrix(laminate, z)
-    alpha, beta, delta = compliancematrix(A, B, D)
+    A, B, D = laminatestiffnessmatrix(laminate, z)
+    alpha, beta, delta = laminatecompliancematrix(A, B, D)
     epsilonbar, kappa, zvec, epsilonp = strains(alpha, beta, delta, z, forces)
     sigmap, sigma, epsilon = stresses(laminate, epsilonp)
     failure = tsai_wu_plane(sigma, laminate)
@@ -268,7 +268,7 @@ end
 
 
 
-function compliance_matrix(clt::CLT; shear_center=true)
+function compliance_matrix(clt::CLT, shear_center=true)
 
     m = length(clt.sections)
 
@@ -290,7 +290,6 @@ function compliance_matrix(clt::CLT; shear_center=true)
         atinv = (a[2, 2]*a[3, 3] - a[2, 3]^2) / det(a)
         # Atilde = inv(atilde)  # TODO: we only need (1, 1) component so don't need to invert everything
 
-        A = 0.0
         for k = 2:n
             ybar = (yp[k-1] + yp[k])/2
             zbar = (zp[k-1] + zp[k])/2
@@ -328,7 +327,7 @@ function compliance_matrix(clt::CLT; shear_center=true)
     end
     L = -I
     L[1, 4] += 2*A
-    if clt.closedsection
+    if clt.closed_section
         Pbar += L'*(F\L)
     end
     Wbar = inv(Symmetric(Pbar))
