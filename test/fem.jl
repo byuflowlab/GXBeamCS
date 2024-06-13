@@ -242,7 +242,9 @@ end
 
     # plotmesh(nodes, elements)
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
 
     @test isapprox(K[1, 1], 1.249E-01, atol=0.001e-1/2)
@@ -287,7 +289,9 @@ end
 
     # plotmesh(nodes, elements)
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
 
     @test isapprox(K[1, 1], 4.964E-02, atol=0.002e-2)
@@ -350,7 +354,8 @@ end
 
     # plotmesh(nodes, elements)
 
-    S, sc, tc = compliance_matrix(nodes, elements)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, true)
     K = inv(S)
 
     @test isapprox(K[1, 1], 1.835e10, rtol=0.001)
@@ -360,7 +365,7 @@ end
     @test isapprox(K[5, 5], 4.587e8, rtol=0.002)
     @test isapprox(K[6, 6], 4.587e8, rtol=0.002)
 
-    M, mc = mass_matrix(nodes, elements)
+    M, mc = mass_matrix(fem)
 
     @test isapprox(M[1, 1], 7.037e2, rtol=0.001)
     @test isapprox(M[5, 5], 1.759e1, rtol=0.003)
@@ -514,9 +519,10 @@ end
     # see also preVABS documentation examples
 
     nodes, elements = composite_pipe()
+    fem = FEM(nodes, elements)
     # plotmesh(nodes, elements)
 
-    S, sc, tc = compliance_matrix(nodes, elements)
+    S, sc, tc = compliance_matrix(fem)
     K = inv(S)
 
     @test isapprox(K[1, 1], 1.03892e7, rtol=0.005)
@@ -576,12 +582,20 @@ linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(yd
 
     nodes, elements = composite_pipe()
     cache = initialize_cache(nodes, elements)
-    S, sc, tc = compliance_matrix(nodes, elements; cache)
+    fem = FEM(nodes, elements, cache)
+    S, sc, tc = compliance_matrix(fem)
     K = inv(S)
 
     F = [0.0; 0; 0]
     M = [-1000.0; 0; 0]
-    epsilon_b, sigma_b, epsilon_p, sigma_p = strain_recovery(F, M, nodes, elements, cache; gxbeam_order=false)
+    # reorder to GXBeam order
+    F = F[[3, 1, 2]]
+    M = M[[3, 1, 2]]
+    epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, fem) #nodes, elements, cache; gxbeam_order=false)
+    # reorder back from GxBeam order to their order
+    epsilon_b = epsilon_b[[2, 3, 1, 5, 6, 4], :]
+    sigma_b = sigma_b[[2, 3, 1, 5, 6, 4], :]
+
 
     # using PyPlot
     # pygui(true); close("all")
@@ -741,8 +755,9 @@ end
 
     nodes, elements = afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs, ds=0.005, dt=0.01, wns=20)
     # nodes, elements = afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs, nt=[[1, 1, 7], [1, 1, 7], [1, 1, 1, 2, 1, 2, 1], [1, 1, 1, 1, 5]], wnt=[[1, 1, 1], [1, 1, 1]])
+    fem = FEM(nodes, elements)
 
-    S, sc, tc = compliance_matrix(nodes, elements)
+    S, sc, tc = compliance_matrix(fem)
     K = inv(S)
 
     @test isapprox(log10(K[1, 1]), log10(abs(2.389e9)), rtol=0.006)
@@ -812,7 +827,7 @@ end
     # println("K66 = ", round((log10(K[6, 6])/log10(4.406e8) - 1)*100, digits=2), "%")
 
 
-    M, mc = mass_matrix(nodes, elements)
+    M, mc = mass_matrix(fem)
     @test isapprox(M[1, 1], 258.053, rtol=0.01)
     @test isapprox(M[5, 5], 2.172, rtol=0.02)
     @test isapprox(M[6, 6], 46.418, rtol=0.03)
@@ -880,9 +895,10 @@ end
     webs = [web, web]
 
     nodes, elements = afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs, ds=0.01, dt=0.2, wns=20)#, ds=0.05, dt=0.01, wns=20)
-
     cache = initialize_cache(nodes, elements)
-    S, sc, tc = compliance_matrix(nodes, elements; cache)
+    fem = FEM(nodes, elements, cache)
+
+    S, sc, tc = compliance_matrix(fem)
     K = inv(S)
 
     # figure()
@@ -900,7 +916,13 @@ end
 
     F = [0.0; 0; 0]
     M = [0.0; 0; 1e6]
-    epsilon_b, sigma_b, epsilon_p, sigma_p = strain_recovery(F, M, nodes, elements, cache; gxbeam_order=false)
+    # reorder to GXBeam order
+    F = F[[3, 1, 2]]
+    M = M[[3, 1, 2]]
+    epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, fem) #nodes, elements, cache; gxbeam_order=false)
+    # reorder back from GxBeam order to their order
+    epsilon_b = epsilon_b[[2, 3, 1, 5, 6, 4], :]
+    sigma_b = sigma_b[[2, 3, 1, 5, 6, 4], :]
 
     idx = 585:-1:571
     n = length(idx)
@@ -1132,9 +1154,9 @@ end
 
     # get compliance, mass matrices
     cache = initialize_cache(nodes, elements)
-    compliance = [compliance_matrix(nodes, elements; cache, gxbeam_order=true, shear_center=false)[1]
-                    for i in 1:num_beam_elements]
-    mass = [mass_matrix(nodes, elements)[1] for i in 1:num_beam_elements]
+    fem = FEM(nodes, elements, cache)
+    compliance = [compliance_matrix(fem, false)[1] for i in 1:num_beam_elements]
+    mass = [mass_matrix(fem)[1] for i in 1:num_beam_elements]
 
     # model cantilever beam in GXBeam
     xb = range(0.0, stop=beam_length, length=num_beam_elements+1)
@@ -1158,7 +1180,7 @@ end
         )
 
     #solve GXBeam
-    system, state, converged = static_analysis(assembly;
+    system, state, converged = GXBeam.static_analysis(assembly;
                                                 prescribed_conditions,
                                                 linear=true)
 
@@ -1168,8 +1190,7 @@ end
 
     # run GXBeam strain recovery
     strain_beam, stress_beam,
-        strain_ply, stress_ply = strain_recovery(F_GXBeam, M_GXBeam, nodes, elements, cache;
-                                                        gxbeam_order=true)
+        strain_ply, stress_ply = strains_and_stresses(F_GXBeam, M_GXBeam, fem)
 
     #strains
     @test isapprox(strain_beam[1,1], -2.44191e-7, rtol=1e-4) #axial strain is in the first row now to match GXBeam coordinate system
@@ -1189,7 +1210,7 @@ end
     @test isapprox(stress_beam[5,5], -0.280588, rtol=1e-4)
     @test isapprox(stress_beam[6,1], 113.958, rtol=1e-4)
 
-    end
+end
 
 function sectionwrapper(x)
 
@@ -1243,8 +1264,9 @@ function sectionwrapper(x)
     nodes, elements = afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs)
 
     cache = initialize_cache(TF, nodes, elements)
-    S, sc, tc = compliance_matrix(nodes, elements, cache=cache)
-    M, mc = mass_matrix(nodes, elements)
+    fem = FEM(nodes, elements, cache)
+    S, sc, tc = compliance_matrix(fem)
+    M, mc = mass_matrix(fem)
 
     return vcat([S; M]...)
 end
@@ -1296,8 +1318,9 @@ function sectionwrapper_nowebs(x)
     nodes, elements = afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs)
 
     cache = initialize_cache(TF, nodes, elements)
-    S, sc, tc = compliance_matrix(nodes, elements, cache=cache)
-    M, mc = mass_matrix(nodes, elements)
+    fem = FEM(nodes, elements, cache)
+    S, sc, tc = compliance_matrix(fem)
+    M, mc = mass_matrix(fem)
 
     return vcat([S; M]...)
 end
