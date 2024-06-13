@@ -207,7 +207,7 @@ end
 plot geometry for a quick visualization.
 Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
-function plotgeometry(fem::FEM, pyplot; plotnumbers=false) end
+function plotgeometry(::CompositeSectionAnalysis, pyplot; plotnumbers=false) end
 
 """
     plotsoln(::CompositeSectionAnalysis, soln, pyplot)

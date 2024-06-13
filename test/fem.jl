@@ -1,8 +1,14 @@
-# Unit Tests for section.jl and afmesh.jl
-
-using GXBeam.GXBeamCS, LinearAlgebra, Random, Test
+# Unit Tests for fem.jl and afmesh.jl
+using GXBeamCS, LinearAlgebra, Random, Test
 using ForwardDiff, FiniteDiff
 import GXBeam
+
+function internal_ordering(S)
+
+    idx = [2, 3, 1, 5, 6, 4]
+
+    return S[idx, idx]
+end
 
 @testset "section properties: material stiffness matrix" begin
 
@@ -69,7 +75,9 @@ end
 
     end
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
 
     @test isapprox(K[1, 1], 3.4899e-1, atol=0.0001e-1)
@@ -102,8 +110,9 @@ end
     end
     end
 
-
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
 
     @test isapprox(K[1, 1], 1.28e-1, atol=0.01e-1)
@@ -129,7 +138,9 @@ end
         end
     end
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
     @test isapprox(K[1, 1], 5.039E-01, atol=0.001e-1)
     @test isapprox(K[2, 2], 4.201E-01, atol=0.001e-1)
@@ -149,7 +160,9 @@ end
         end
     end
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
     @test isapprox(K[1, 1], 7.598E-01, atol=0.001e-1)
     @test isapprox(K[2, 2], 4.129E-01, atol=0.001e-1)
@@ -171,7 +184,9 @@ end
         end
     end
 
-    S, sc, tc = compliance_matrix(nodes, elements, gxbeam_order=false, shear_center=false)
+    fem = FEM(nodes, elements)
+    S, sc, tc = compliance_matrix(fem, false)
+    S = internal_ordering(S)
     K = inv(S)
     @test isapprox(K[1, 1], 5.0202E-01, atol=0.0001e-1)
     @test isapprox(K[2, 2], 5.0406E-01, atol=0.0001e-1)

@@ -3,6 +3,13 @@ uuid = "ecf8e379-0620-438b-a5cb-8c0af8704d10"
 authors = ["Andrew Ning <aning@byu.edu>", "Adam Cardoza"]
 version = "1.0.0-DEV"
 
+[deps]
+FLOWMath = "6cb5d3fb-0fe8-4cc2-bd89-9fe0b19a99d3"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
 [compat]
 julia = "1.7"
 

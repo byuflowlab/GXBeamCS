@@ -12,14 +12,14 @@ export compliance_matrix, mass_matrix, strains_and_stresses, tsai_wu
 export plotmesh, plotsoln
 
 # from fem
-export Node, MeshElement
+export Node, MeshElement, FEM
 export initialize_cache
 
 # from afmesh
 export afmesh
 
 # from clt
-export BeamSection
+export BeamSection, CLT
 
 # shared definitions and functions
 include("common.jl")

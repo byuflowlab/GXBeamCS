@@ -592,7 +592,7 @@ Compute compliance matrix given a finite element mesh described by nodes and ele
 """
 function compliance_matrix(fem::FEM, shear_center=true)
 
-    (elements, nodes, cache) = fem
+    (; elements, nodes, cache) = fem
 
     # problem dimensions
     ne = length(elements) # number of elements
@@ -766,7 +766,7 @@ Compute mass matrix for the section
 """
 function mass_matrix(fem::FEM)
 
-    nodes = fem.nodes; elements=fem.elements
+    (; nodes, elements) = fem
 
     # --- find total mass and center of mass -----
     m = 0.0
@@ -826,7 +826,7 @@ Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
 function plotgeometry(fem::FEM, pyplot; plotnumbers=false)
 
-    nodes = fem.nodes; elements=fem.elements
+    (; nodes, elements) = fem
 
     ne = length(elements)
 
@@ -875,7 +875,7 @@ Compute stresses and strains at each element in cross section.
 """
 function strains_and_stresses(F, M, fem::FEM)
 
-    (nodes, elements, cache) = fem
+    (; nodes, elements, cache) = fem
 
     # initialize outputs
     T = promote_type(eltype(F), eltype(M))
@@ -958,7 +958,7 @@ Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
 function plotsoln(fem::FEM, soln, pyplot)
 
-    nodes = fem.nodes; elements = fem.elements
+    (; nodes, elements) = fem
 
     ne = length(elements)
     nn = length(nodes)
