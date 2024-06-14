@@ -80,7 +80,7 @@ function preprocess_layers(segments, webs, dt=nothing, nt=nothing, wnt=nothing)
     # number of segments
     ns = length(segments)
 
-    # repartion thickneses if necessary so that thickness mesh is consistent
+    # re-partition thickneses if necessary so that mesh thickness is consistent
     if !isnothing(dt) || !isnothing(nt)
         segments = redistribute_thickness(segments, dt, nt)
     end
@@ -411,12 +411,12 @@ function web_intersections(xiu, yiu, xu, yu, txu, tyu, chord, webloc_i, web)
 
     # compute total thickness of web
     webT = 0.0
-    nl = length(web)
+    nl = length(web) #Number of layers in the web
     for j = 1:nl
         webT += web[j].t
     end
 
-    # center web on web loc
+    # center web on web loc (Start from the left side)
     xstart = webloc_i*chord - webT/2.0  # TODO: what if this is now out of the sector?  leave that up to user.
 
     # find x locations for the mesh discretizations through this web
@@ -431,7 +431,7 @@ function web_intersections(xiu, yiu, xu, yu, txu, tyu, chord, webloc_i, web)
     xu_web = Vector{TF}(undef, nl+1)
     yu_web = Vector{TF}(undef, nl+1)
     for j = 1:nl+1
-        # interpolate to find nondimensional distance
+        # linearly interpolate to find nondimensional distance
         idx = searchsortedlast(xiu, xiu_web[j])
         eta = (xiu_web[j] - xiu[idx]) / (xiu[idx+1] - xiu[idx])
         yiu_web[j] = yiu[idx] + eta * (yiu[idx+1] - yiu[idx])
@@ -452,7 +452,8 @@ function web_intersections(xiu, yiu, xu, yu, txu, tyu, chord, webloc_i, web)
     idxs = searchsortedlast(xu, xu_web[1])
     idxe = searchsortedfirst(xu, xu_web[end])
 
-    # create new grid points (note that other index values could change)
+    # create new grid points (note that other index values could change) 
+    #Note: If I wanted to overlay the web, then I could just concatenate the vectors and sort them.... I think? -> No, that would just make a bunch of extra cells... 
     newxiu = [xiu[1:idxs]; xiu_web; xiu[idxe:end]]
     newyiu = [yiu[1:idxs]; yiu_web; yiu[idxe:end]]
     newxu = [xu[1:idxs]; xu_web; xu[idxe:end]]
@@ -517,22 +518,22 @@ function te_inner_intersection(xiu, yiu, xil, yil, xu, yu, xl, yl)
         return 0.0, 0.0, xu, yu, xl, yl
     end
 
-
-
 end
 
 """
 create nodes and elements for half (upper or lower) portion of airfoil
 """
-function nodes_half(xu, yu, txu, tyu, xbreak, segments, chord, x_te, y_te)
+function nodes_half(xu, yu, txu, tyu, xbreak, segments, chord, x_te, y_te, TEthickness)
     nl = length(segments[1])  # number of layers (same for all segments)
 
     TF = promote_type(eltype(xu), eltype(yu), eltype(txu), eltype(tyu), eltype(eltype(eltype(segments))), eltype(chord), eltype(x_te), eltype(y_te))
+
     # initialize
     nxu = length(xu)
     if x_te != 0.0
         nodes_te = nl + 1
         elements_te = nl
+
     else
         nodes_te = 0
         elements_te = 0
@@ -599,18 +600,21 @@ function nodes_half(xu, yu, txu, tyu, xbreak, segments, chord, x_te, y_te)
         nex = nodesu[n-nl-1].x
         ney = nodesu[n-nl-1].y
 
-        for j = 1:nl+1
-            njy = nodesu[n - (nl+1) - j].y  # use last row height (could really do either)
+        ### Adam's hack to try and connect the final section with a TE Web (Use the following code if no TE web).
+        if !TEthickness
+            for j = 1:nl+1
+                njy = nodesu[n - (nl+1) - j].y  # use last row height (could really do either)
 
-            frac = (njy - nsy)/(ney - nsy)
-            nodesu[n - j] = Node(nsx + frac*(nex-nsx), njy)
-        end
+                frac = (njy - nsy)/(ney - nsy)
+                nodesu[n - j] = Node(nsx + frac*(nex-nsx), njy)
+            end
 
-        # move second to last row back halfway to make room
-        for j = 1:nl+1
-            newx = 0.5 * (nodesu[n - (nl+1) - j].x + nodesu[n - 2*(nl+1) - j].x)
-            newy = 0.5 * (nodesu[n - (nl+1) - j].y + nodesu[n - 2*(nl+1) - j].y)
-            nodesu[n - nl-1 - j] = Node(newx, newy)
+            # move second to last row back halfway to make room
+            for j = 1:nl+1
+                newx = 0.5 * (nodesu[n - (nl+1) - j].x + nodesu[n - 2*(nl+1) - j].x)
+                newy = 0.5 * (nodesu[n - (nl+1) - j].y + nodesu[n - 2*(nl+1) - j].y)
+                nodesu[n - nl-1 - j] = Node(newx, newy)
+            end
         end
 
         nxu -= 1  # hack for next part to create correct number of elements
@@ -636,7 +640,7 @@ end
 given nodes/elements for upper surface and lower surface separately,
 combine into one set making sure to reuse the common nodes that occur at the LE/TE
 """
-function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te)
+function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te, TEthickness, verbose)
 
     TN = promote_type(eltype(eltype(nodesu)), eltype(eltype(nodesl)))
     TE = promote_type(eltype(eltype(elementsu)), eltype(eltype(elementsl)))
@@ -646,9 +650,10 @@ function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te)
     nnl = length(nodesl)
     neu = length(elementsu)
     nel = length(elementsl)
-    if x_te != 0.0
+    if x_te != 0.0 
         nn = nnu + nnl - 2*nt  # number of nodes
         ne = neu + nel  # number of elements
+
     else
         nn = nnu + nnl - nt  # no shared t.e.
         ne = neu + nel + nlayers
@@ -661,7 +666,7 @@ function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te)
     nodes[1:nnu] .= nodesu
     elements[1:neu] .= elementsu
 
-    # for lower surface we share leading and traling edges so don't copy over those nodes
+    # for lower surface we share leading and traling edges so don't copy over those nodes 
     for i = nnu+1:nn
         j = i - nnu + nt  # starts at 1 + nt
         nodes[i] = Node(nodesl[j].x, nodesl[j].y)
@@ -690,7 +695,7 @@ function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te)
     end
 
     # last nt-1 elements use the node numbers from the upper surface trailing edge
-    if x_te != 0.0
+    if x_te != 0.0 #|| !intersectingmesh
         for i = neu+nel-(nt-1)+1:neu+nel
             j = i - neu  # element index
             k = i - (neu+nel-(nt-1))  # starts at 1
@@ -699,16 +704,26 @@ function combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayers, x_te)
             nodenum = [nnu-nt+k+1; oldnodenum[1]; oldnodenum[4]; nnu-nt+k]
             elements[i] = MeshElement(nodenum, elementsl[j].material, elementsl[j].theta)
         end
+        return nodes, elements
     else
         # add new elements to close trailing edge.
         for i = 1:nlayers
             nodenum = [nnl-i+1+(nnu-nt); nnl-i+(nnu-nt); nnu-i; nnu-i+1]
             elements[neu+nel+i] = MeshElement(nodenum, elementsu[end-i+1].material, elementsu[end-i+1].theta)
         end
-    end
 
-    return nodes, elements
+        if TEthickness 
+            return nodes, elements[1:end-(nlayers+1)]
+
+        else
+            if verbose
+                @warn("afmesh(): Your TE thickness is non-zero and you haven't closed the loop.")
+            end
+            return nodes, elements
+        end
+    end 
 end
+
 
 """
 add the nodes and elements for the webs.  given the x locations (by idx) where the webs start
@@ -773,6 +788,7 @@ function addwebs(idx_webu, idx_webl, nx_web, nodes, elements, webs, nnu, nl, ne_
 end
 
 
+
 """
     afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; ds=nothing, dt=nothing, ns=nothing, nt=nothing, wns=4, wnt=nothing)
 
@@ -800,9 +816,28 @@ in the normal direction, using the number of grid points as defined by segment w
 - `nodes::Vector{Node{Float64}}`: nodes for this mesh
 - `elements::Vector{MeshElement{Float64}}`: elements for this mesh
 """
-function afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; ds=nothing, dt=nothing, ns=nothing, nt=nothing, wns=4, wnt=nothing)
+function afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; ds=nothing, dt=nothing, ns=nothing, nt=nothing, wns=4, wnt=nothing, TEthickness=false, TEweb=true, verbose=false)
+
 
     # -------------- preprocessing -----------------
+    # Check if there is a TE thickness and the user wants a TE web. 
+    if TEthickness&&TEweb 
+        t_TE = 0.
+        for i in eachindex(segments[end])
+            t_TE += segments[end][i].t
+        end
+        
+        #Check if the TE will intersect
+        if (yaf[1] - t_TE/chord) >= (yaf[end] + t_TE/chord)
+            web_TE = segments[end]
+            # web_TE_loc = 1 - t_TE/(2*chord)
+            web_TE_loc = 1 - t_TE/(chord) #Todo: Should probably come up with a better way to define the TE web location.
+
+            push!(webloc, web_TE_loc)
+            push!(webs, web_TE)
+        end
+    end
+
     # preprocess the segments so all have same number of layers
     segments, webs = preprocess_layers(segments, webs, dt, nt, wnt)
 
@@ -825,25 +860,32 @@ function afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; d
     # add webs. note that doing so changes the mesh so tangential directions and inner surface must be recomputed
     # webloc[i] must be in increasing order so that the previous indices in idx_web remain correct as points are added behind them.
     nw = length(webs)
+    
     idx_webu = vector_ints(nw)
     idx_webl = vector_ints(nw)
     nx_web = vector_ints(nw)
     for i = 1:nw
+        # Upper surface
         idx_webu[i], xiu, yiu, xu, yu, txu, tyu = web_intersections(xiu, yiu, xu, yu, txu, tyu, chord, webloc[i], webs[i])
+        # Lower surface
         idx_webl[i], xil, yil, xl, yl, txl, tyl = web_intersections(xil, yil, xl, yl, txl, tyl, chord, webloc[i], webs[i])
         nx_web[i] = length(webs[i]) + 1
     end
+    
 
     # determine intersection point for trailing edge.  (note must be done at end)
     x_te, y_te, xu, yu, xl, yl = te_inner_intersection(xiu, yiu, xil, yil, xu, yu, xl, yl)
+    
     # -----------------------------------------------------------------
 
     # ------------------ build mesh --------------------
-    nodesu, elementsu = nodes_half(xu, yu, txu, tyu, xbreak, segments, chord, x_te, y_te)
-    nodesl, elementsl = nodes_half(xl, yl, txl, tyl, xbreak, segments, chord, x_te, y_te)
+    nodesu, elementsu = nodes_half(xu, yu, txu, tyu, xbreak, segments, chord, x_te, y_te, TEthickness)
+    nodesl, elementsl = nodes_half(xl, yl, txl, tyl, xbreak, segments, chord, x_te, y_te, TEthickness)
 
     nlayer = length(segments[1])
-    nodes, elements = combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayer, x_te)
+    
+    nodes, elements = combine_halfs(nodesu, elementsu, nodesl, elementsl, nlayer, x_te, TEthickness, verbose)
+    
 
     if nw > 0 # only add webs if there are webs defined
         nodes, elements = addwebs(idx_webu, idx_webl, nx_web, nodes, elements, webs, length(nodesu), nlayer, wns)
@@ -860,6 +902,116 @@ function afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; d
         nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)  # added xc back to keep origin at original location
     end
     # -----------------------------------
+
+    return nodes, elements
+end
+
+"""
+    mesh_cylinder(R, thickness, material)
+
+A simple function to mesh a circular cross-section. 
+
+*Inputs*
+- r::Vector{Float} - A vector of all the radial location of nodes. Assumed from least to greatest. 
+- materials::Vector{Material} - All of the materials used in the cross section. 
+- material_idx::Vector{Int} - The index of the material in the materials vector for each layer.
+Assumed in order of outermost layer to inner most layer. Note: This is opposite to the order of `r`. 
+- plyangles::Vector{Float} - The ply angle of a given radial element (same order as material_idx).
+- nt::Int - Number of tangential points (How many elements around the circle). 
+"""
+function mesh_cylinder(r, materials, material_idx; plyangles=zeros(length(r)-1), nt::Int=200)
+    nr = length(r) #Number of radial points. 
+    nn = nr*(nt-1) #Number of nodes
+    ne = (nr-1)*(nt-1) #Number of elements
+
+
+    nodes = Vector{Node{Float64}}(undef, nn)
+    elements = Vector{MeshElement{Float64}}(undef, ne)
+    theta = range(0.0, 2*pi, length=nt)
+
+    m = 1
+    for i = 1:nt-1
+        for j = 1:nr
+            nodes[m] = Node(r[j]*cos(theta[i]), r[j]*sin(theta[i]))
+            m += 1
+        end
+    end
+
+    n = 1
+    for i = 1:nt-1
+        for j = 1:nr-1
+            if i == nt-1
+                ip = 0
+            else
+                ip = i
+            end
+            
+            material = materials[material_idx[j]] #Extract the correct material
+
+            elements[n] = MeshElement([nr*ip+j, nr*(i-1)+j, nr*(i-1)+j+1, nr*ip+j+1], material, plyangles[j])
+            n += 1
+        end
+    end
+    
+
+    return nodes, elements
+end
+
+"""
+    parse_BECAS(path)
+
+Convert BECAS input files (N2D.in, E2D.in, EMAT.in, MATPROPS.in) into a vector of `GXBeam.GXBeamCS.Node` and a vector `GXBeam.GXBeamCS.MeshElement`.
+
+**Arguments**
+- path::String - The path to the BECAS input files.
+
+"""
+function parse_BECAS(path; n2dfilename="N2D.in", e2dfilename="E2D.in", ematfilename="EMAT.in", matpropsfilename="MATPROPS.in")
+    
+    #Read in the node data
+    n2d = readdlm(joinpath(path, n2dfilename))
+    nodelist = Int.(n2d[:, 1]) #The BECAS node numbers
+    num_nodes = length(nodelist)
+
+    #Read in the element set data (what nodes belong to what element)
+    e2d = readdlm(joinpath(path, e2dfilename), Int)
+    elementlist = Int.(e2d[:, 1]) #The BECAS element numbers
+    nelem = length(elementlist)
+
+    #Read in the material data for each element
+    emat = readdlm(joinpath(path, ematfilename))
+
+    #Read in the material properties
+    #E1 E2 E3 G12 G13 G23 nu12 nu13 nu23 rho
+    mats = readdlm(joinpath(path, matpropsfilename))
+    mat_vec = [GXBeam.GXBeamCS.Material(mats[i,:]...) for i in 1:size(mats, 1)]
+
+
+    #Create the GXBeam nodes
+    nodes = Vector{GXBeam.GXBeamCS.Node{Float64}}(undef, num_nodes)
+    for i in 1:num_nodes
+        nodes[i] = GXBeam.GXBeamCS.Node(n2d[i, 2], n2d[i, 3])
+    end
+
+    #Create the GXBeam elements
+    elements = Vector{GXBeam.GXBeamCS.MeshElement{Float64}}(undef, nelem)
+    for i in 1:nelem
+
+        #Convert from BECAS to GXBeam node numbering
+        veci = vec(e2d[i, 2:5])
+        for j in eachindex(veci)
+            idx = findfirst(isequal(veci[j]), nodelist)
+            veci[j] = idx
+        end
+
+        element_idx = e2d[i, 1] #Extract the BECAS element number
+        mat_idx = findfirst(isequal(element_idx), emat[:, 1]) #Find the row in the emat matrix that corresponds to the element number
+        material_num = Int(emat[mat_idx, 2]) #The material number for the element
+        mat_theta = emat[mat_idx, 3]*(pi/180) #Fiber angle
+        # mat_phi = emat[mat_idx, 4]*(pi/180) #Fiber plane angle. #Todo: What is this? -> I think GXBeamCS calculates this based on the node order... So I might need to check the order of the nodes in the element list. -> I think I have a function to calculate the angle based on the node order.
+
+        elements[i] = GXBeam.GXBeamCS.MeshElement(veci, mat_vec[material_num], mat_theta)
+    end
 
     return nodes, elements
 end
