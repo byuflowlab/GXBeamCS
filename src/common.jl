@@ -119,3 +119,101 @@ Base.convert(::Type{Layer{TF}}, l::Layer) where {TF} = Layer{TF}(l)
 
 
 # -----------------------------------------------------------
+
+
+abstract type CompositeSectionAnalysis end
+
+"""
+    compliance_matrix(::CompositeSectionAnalysis, shear_center=true)
+
+Compute compliance matrix for the section.
+
+# Arguments
+- `shear_center::Bool`: Indicates whether the compliance matrix should be provided about the
+    shear center
+
+# Returns
+- `S::Matrix`: compliance matrix in the order expected by GXBeam.
+- `sc::Vector{float}`: x, y location of shear center (location where a transverse/shear
+    force will not produce any torsion, i.e., beam will not twist)
+- `tc::Vector{float}`: x, y location of tension center, aka elastic center, aka centroid
+    (location where an axial force will not produce any bending, i.e., beam will remain
+    straight)
+"""
+function compliance_matrix(::CompositeSectionAnalysis, shear_center=true)
+    S = zeros(6, 6)
+    sc = [0.0, 0.0]
+    tc = [0.0, 0.0]
+    return S, sc, tc
+end
+
+"""
+    mass_matrix(::CompositeSectionAnalysis)
+
+Compute mass matrix for the section
+
+# Returns
+- `M::Matrix`: mass matrix in the order expected by GXBeam.
+- `mc::Vector{float}`: x, y location of mass center
+"""
+function mass_matrix(::CompositeSectionAnalysis)
+    M = zeros(6, 6)
+    mc = [0.0, 0.0]
+    return M, mc
+end
+
+"""
+    strains_and_stresses(F, M, ::CompositeSectionAnalysis)
+
+Compute stresses and strains across the cross section (locations depend on the method).
+Uses GXBeam local beam axis (e.g. axial stresses would correspond to the `xx` direction, or first index).
+
+# Arguments
+- `F::Vector(3)`: force at this cross section in x, y, z directions.  Using GXBeam local beam axis.
+- `M::Vector(3)`: moment at this cross section in x, y, z directions. Using GXBeam local beam axis.
+
+# Returns
+- `strain_b::Vector(6, nloc)`: strains in beam coordinate system for each element. order: xx, yy, zz, xy, xz, yz
+    the meaning of the locations varies with the different methods (e.g., elements vs edges of plys)
+- `stress_b::Vector(6, nloc)`: stresses in beam coordinate system for each element. order: xx, yy, zz, xy, xz, yz
+- `strain_p::Vector(6, nloc)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+- `stress_p::Vector(6, nloc)`: stresses in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+"""
+function strains_and_stresses(F, M, ::CompositeSectionAnalysis)
+    return zeros(6, 1), zeros(6, 1), zeros(6, 1), zeros(6, 1)
+end
+
+
+"""
+    tsai_wu(stress_p, ::CompositeSectionAnalysis)
+
+Tsai Wu failure criteria
+
+# Arguments
+- `stress_p::vector(6, nloc)`: stresses in ply coordinate system
+
+# Returns
+- `failure::vector(nloc)`: tsai-wu failure criteria at each location.  fails if >= 1
+"""
+function tsai_wu(stress_p, ::CompositeSectionAnalysis)
+    return zeros(1)
+end
+
+
+
+"""
+    plotgeometry(::CompositeSectionAnalysis, pyplot; plotnumbers=false)
+
+plot geometry for a quick visualization.
+Need to pass in a PyPlot object as PyPlot is not loaded by this package.
+"""
+function plotgeometry(::CompositeSectionAnalysis, pyplot; plotnumbers=false) end
+
+"""
+    plotsoln(::CompositeSectionAnalysis, soln, pyplot)
+
+plot stress/strain on mesh
+soln could be any vector that is of appropriate length for the analysis method, e.g., sigma_b[3, :]
+Need to pass in a PyPlot object as PyPlot is not loaded by this package.
+"""
+function plotsoln(::CompositeSectionAnalysis, soln, pyplot) end

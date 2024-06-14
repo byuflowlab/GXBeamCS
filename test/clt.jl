@@ -1,22 +1,39 @@
-using GXBeam.GXBeamCS
+using GXBeamCS
 using Test
 
+function stiffness_in_internal_order(S)
+    S2 = S[[1, 4, 5, 6], [1, 4, 5, 6]]  # remove zeros for shear flow
+    K = inv(S2)
+    K = K[[1, 3, 4, 2], [1, 3, 4, 2]]  # change from gxbeam order Faxial {Fy, Fz omitted}, torsion, Myy, Mzz to Faxial, Myy, Mzz, torsion
+    return K, S2[[1, 3, 4, 2], [1, 3, 4, 2]]
+end
+
 #------- Foundations of Classical Laminate Theory, Andreas Öchsner -----
+
+function lam_test_material()
+
+    E1 = 129000.0e6  # note must be typo on this book
+    E2 = 11000.0e6
+    G12 = 6600.0e6
+    nu12 = 0.28
+    rho = 1.0
+    S1t = 1950.0e6
+    S1c = 1480e6
+    S2t = 48e6
+    S2c = 200e6
+    S12 = 79e6
+    mat = MaterialPlane(E1, E2, G12, nu12, rho, S1t, S1c, S2t, S2c, S12)
+
+    t = 8e-3
+
+    return mat, t
+end
+
+@testset "Lamiante CLT Test 1" begin
 # -------- 4.2. Problem 1 ------------
 
-E1 = 129000.0e6  # note must be typo on this book
-E2 = 11000.0e6
-G12 = 6600.0e6
-nu12 = 0.28
-rho = 1.0
-S1t = 1950.0e6
-S1c = 1480e6
-S2t = 48e6
-S2c = 200e6
-S12 = 79e6
-mat = MaterialPlane(E1, E2, G12, nu12, rho, S1t, S1c, S2t, S2c, S12)
+mat, t = lam_test_material()
 
-t = 8e-3
 theta = [45 -45 0 90 90 0 -45 45]*pi/180
 laminate = Layer.(Ref(mat), t/8, theta)
 
@@ -59,7 +76,7 @@ Q4, _, _ = GXBeamCS.Qbar(laminate[4])
 @test isapprox(Q4[3, 3]/1e6, 6600.0, atol=1e-3)
 
 z, h = GXBeamCS.zspacing(laminate)
-A, B, D = GXBeamCS.stiffnessmatrix(laminate, z)
+A, B, D = GXBeamCS.laminatestiffnessmatrix(laminate, z)
 
 @test isapprox(A[1, 1]/1e3, 455428.170, atol=1e-3)
 @test isapprox(A[1, 2]/1e3, 133146.612, atol=1e-3)
@@ -82,7 +99,7 @@ A, B, D = GXBeamCS.stiffnessmatrix(laminate, z)
 @test isapprox(D[2, 3]*1e3, 356382.514, atol=1e-3)
 @test isapprox(D[3, 3]*1e3, 1292780.601, atol=1e-3)
 
-alpha, beta, delta = GXBeamCS.compliancematrix(A, B, D)
+alpha, beta, delta = GXBeamCS.laminatecompliancematrix(A, B, D)
 
 @test isapprox(alpha[1, 1]/1e-10, 24.009482, atol=1e-6)
 @test isapprox(alpha[1, 2]/1e-10, -7.019287, atol=1e-6)
@@ -299,17 +316,20 @@ sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
 @test isapprox(sigma[3, 14]/1e6, 21.852, atol=1e-3)
 @test isapprox(sigma[3, 15]/1e6, -21.852, atol=1e-3)
 @test isapprox(sigma[3, 16]/1e6, -29.136, atol=1e-3)
-
+end
 
 # ----- 4.3. Problem 2 --------
+@testset "Lamiante CLT Test 2" begin
+
+mat, t = lam_test_material()
 theta = [45 -45 0 90 0 90 45 -45]*pi/180
 laminate = Layer.(Ref(mat), t/8, theta)
 
 forces = [1000*1e3; 0.0; 0.0; 0.0; 0.0; 0.0]
 
 z, h = GXBeamCS.zspacing(laminate)
-A, B, D = GXBeamCS.stiffnessmatrix(laminate, z)
-alpha, beta, delta = GXBeamCS.compliancematrix(A, B, D)
+A, B, D = GXBeamCS.laminatestiffnessmatrix(laminate, z)
+alpha, beta, delta = GXBeamCS.laminatecompliancematrix(A, B, D)
 epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forces)
 sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
 
@@ -395,11 +415,14 @@ sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
 @test isapprox(sigma[2, 14]/1e6, 13.931, atol=1e-3)
 @test isapprox(sigma[2, 15]/1e6, 16.225, atol=1e-3)
 @test isapprox(sigma[2, 16]/1e6, 17.405, atol=1e-3)
-
+end
 
 
 # ------- 4.4. Problem 3 --------
 
+@testset "Lamiante CLT Test 3" begin
+
+mat, t = lam_test_material()
 theta = [45 0 30 -45]*pi/180
 laminate = Layer.(Ref(mat), t/4, theta)
 
@@ -492,25 +515,33 @@ failure = GXBeamCS.tsai_wu_plane(sigmaR, laminate)
 @test isapprox(failure[6], 1.0, atol=1e-2)
 @test isapprox(failure[7], 1.0, atol=1e-2)
 @test isapprox(failure[8], 1.0, atol=1e-2)
-
+end
 
 # ------- Kollar example 6.2 ------
 
-E1 = 148e9
-E2 = 9.65e9
-G12 = 4.55e9
-nu12 = 0.3
-rho = 1.0
-m0 = MaterialPlane(E1, E2, G12, nu12, rho)
-t0 = 0.1e-3
+function beam_test_material()
+    E1 = 148e9
+    E2 = 9.65e9
+    G12 = 4.55e9
+    nu12 = 0.3
+    rho = 1.0
+    m0 = MaterialPlane(E1, E2, G12, nu12, rho)
+    t0 = 0.1e-3
 
-E1 = 16.39e9
-E2 = 16.39e9
-G12 = 38.19e9
-nu12 = 0.801
-rho = 1.0
-m45 = MaterialPlane(E1, E2, G12, nu12, rho)
-t45 = 0.2e-3
+    E1 = 16.39e9
+    E2 = 16.39e9
+    G12 = 38.19e9
+    nu12 = 0.801
+    rho = 1.0
+    m45 = MaterialPlane(E1, E2, G12, nu12, rho)
+    t45 = 0.2e-3
+
+    return m0, t0, m45, t45
+end
+
+@testset "Beam CLT Test 6.2" begin
+
+m0, t0, m45, t45 = beam_test_material()
 
 
 t = [t45*ones(2); t0*ones(12); t45*ones(2)]
@@ -532,15 +563,30 @@ yc, zc = GXBeamCS.centroid(sections)
 @test isapprox(61e-3+zc, 0.0441, atol=1e-4)
 
 EA, EIyy, EIzz, EIyz, GJ = GXBeamCS.beamstiffnessold(sections)
-S, K, _, _ = GXBeamCS.beamstiffness(sections)
+closed_section = false
+clt = CLT(sections, closed_section)
+shear_center = false
+S, _, _ = compliance_matrix(clt, shear_center)
+K, _ = stiffness_in_internal_order(S)
 
 @test isapprox(EA/1e6, 21.22, atol=1e-2)  # same for open/closed if B = 0
 @test isapprox(EIyy/1e3, 8.530, atol=1e-3)
 
 @test isapprox(K[1, 1]/1e6, 21.22, atol=1e-2)  # same for open/closed if B = 0
 @test isapprox(K[2, 2]/1e3, 8.530, atol=1e-2)
+end
+
 
 # ----------- example 6.3 ------------
+@testset "Beam CLT Test 6.3" begin
+
+m0, t0, m45, t45 = beam_test_material()
+
+
+t = [t45*ones(2); t0*ones(12); t45*ones(2)]
+theta = [0.0; 0.0; zeros(12); 0.0; 0.0]*pi/180
+mat = [fill(m45, 2); fill(m0, 12); fill(m45, 2)]
+laminate = Layer.(mat, t, theta)
 
 b1 = BeamSection(laminate, [0.0; 52e-3], [0.0; 0.0])
 b2 = BeamSection(laminate, [51e-3; 51e-3], [1e-3; 69e-3])
@@ -559,7 +605,12 @@ EA, EIyy, EIzz, EIyz, GJ = GXBeamCS.beamstiffnessold([b])
 @test isapprox(EIzz/1e3, 20.924, atol=1e-1)  # looser tolerances for these
 @test isapprox(GJ/1e3, 7.352, atol=1e-3)
 
-S, K, _ = beamstiffness(sections)
+# S, K, _ = beamstiffness(sections)
+clt = CLT(sections)
+shear_center = false
+S, _, _ = compliance_matrix(clt, shear_center)
+K, _ = stiffness_in_internal_order(S)
+
 @test isapprox(K[1, 1]/1e6, 46.303, atol=1e-3)
 @test isapprox(K[2, 2]/1e3, 34.692, atol=1e-3)
 @test isapprox(K[3, 3]/1e3, 20.924, atol=1e-3)
@@ -571,11 +622,19 @@ S, K, _ = beamstiffness(sections)
 @test isapprox(K[2, 4]/1e3, 0.0, atol=1e-6)
 @test isapprox(K[3, 4]/1e3, 0.0, atol=1e-6)
 
-S, K, _ = beamstiffness([b])
-@test isapprox(K[4, 4]/1e3, 7.3, atol=1e-1)  # looser tolerance - Area is a bit ambiguous
+# S, K, _ = beamstiffness([b])
+clt = CLT([b])
+S, _, _ = compliance_matrix(clt, shear_center)
+K, _ = stiffness_in_internal_order(S)
 
+@test isapprox(K[4, 4]/1e3, 7.3, atol=1e-1)  # looser tolerance - Area is a bit ambiguous
+end
 
 # ---------- example 6.5 ------------------
+
+@testset "Beam CLT Test 6.5" begin
+
+m0, t0, m45, t45 = beam_test_material()
 
 t = [t0*ones(10); t0*ones(10)]
 theta = [zeros(10); 45*ones(10)]*pi/180
@@ -585,7 +644,11 @@ laminate = Layer.(mat, t, theta)
 b = BeamSection(laminate, [0.0; 50e-3; 50e-3; 0.0; 0.0], [0.0; 0.0; 70e-3; 70e-3; 0.0])
 # b = BeamSection(laminate, [-25; 25; 25; -25; -25]*1e-3, [-35; -35; 35; 35; -35]*1e-3)
 
-S, K = beamstiffness([b])
+# S, K = beamstiffness([b])
+clt = CLT([b])
+shear_center = false
+S, _, _ = compliance_matrix(clt, shear_center)
+_, S = stiffness_in_internal_order(S)
 @test isapprox(S[1, 1]/1e-6, 0.02576, atol=1e-5)
 @test isapprox(S[1, 4]/1e-6, -0.4237, atol=1e-4)
 @test isapprox(S[2, 2]/1e-6, 33.91, atol=1e-2)
@@ -607,10 +670,15 @@ S, K = beamstiffness([b])
 # sections = [b1; b2]
 # W, P, yc, zc = beamstiffness(sections)
 # s, S, ysc, zsc = shearflow(sections, P, yc, zc)
-
+end
 
 
 # ----- example 6.6 / Appendix A1 and A.8 ------
+
+@testset "Beam shear flow test 6.6 and A7" begin
+
+m0, t0, m45, t45 = beam_test_material()
+
 t = [t45*ones(2); t0*ones(12); t45*ones(2)]
 theta = [0; 0; zeros(12); 0; 0]*pi/180
 mat = [fill(m45, 2); fill(m0, 12); fill(m45, 2)]
@@ -620,15 +688,20 @@ df = 49e-3
 d = 62e-3
 b = BeamSection(laminate, [0.0; df; df; 0.0], [0.0; 0.0; d; d])
 sections = [b]
-W, P, yc, zc = beamstiffness(sections, closedsection=false)
+# W, P, yc, zc = beamstiffness(sections, closedsection=false)
+closed_section = false
+clt = CLT(sections, closed_section)
+shear_center = false
+W, sc, tc = compliance_matrix(clt, shear_center)
+K, _ = stiffness_in_internal_order(W)
 
-K = P
 @test isapprox(K[1, 1]/1e6, 30.87, atol=0.01)
 @test isapprox(K[2, 2]/1e3, 22.015, rtol=0.001)
 @test isapprox(K[3, 3]/1e3, 8.188, rtol=0.001)
 @test isapprox(K[4, 4], 13.19, atol=0.01)
 
-s, S, ysc, zsc = GXBeamCS.shearflow(sections, P, yc, zc, closedsection=false)
+yc = tc[1]; zc = tc[2]
+s, S, ysc, zsc = GXBeamCS.shearflow(sections, K, yc, zc, closedsection=false)
 # S, K, yc, zc, Wbar, F, L = beamstiffness(sections, closedsection=false)
 # s2, S2, ysc2, zsc2 = GXBeamCS.shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
 
@@ -651,11 +724,26 @@ syz = 0.0
 @test isapprox(szz/1e-7, s[2, 2]/1e-7, atol=0.1)
 @test isapprox(syz/1e-7, s[1, 2]/1e-7, atol=1e-6)
 
+
+
 # ---- appendix A.7
+
+
+t = [t45*ones(2); t0*ones(12); t45*ones(2)]
+theta = [0; 0; zeros(12); 0; 0]*pi/180
+mat = [fill(m45, 2); fill(m0, 12); fill(m45, 2)]
+laminate = Layer.(mat, t, theta)
+
 df = 2.0
 d = 4.0
 b = BeamSection(laminate, [0.0; df; df; 0.0; 0.0], [0.0; 0.0; d; d; 0.0])
-W, P, yc, zc = beamstiffness([b])
+# W, P, yc, zc = beamstiffness([b])
+closed_section = false
+clt = CLT([b], closed_section)
+shear_center = false
+W, _, tc = compliance_matrix(clt, shear_center)
+P, _ = stiffness_in_internal_order(W)
+yc = tc[1]; zc = tc[2]
 s, S, ysc, zsc = GXBeamCS.shearflow([b], P, yc, zc)
 
 gammaz = 1.0 + 1/3*d/df
@@ -669,3 +757,4 @@ syz = 0.0
 @test isapprox(syz/1e-8, s[1, 2]/1e-8, atol=1e-6)
 
 
+end

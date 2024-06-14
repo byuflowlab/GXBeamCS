@@ -1,5 +1,3 @@
-
-
 """
     Node(x, y)
 
@@ -155,7 +153,7 @@ Construct constitutive matrix `Q` for the specified material (with the internal 
 """
 function stiffness(material)
 
-    @unpack E1, E2, E3, nu12, nu13, nu23, G12, G13, G23 = material
+    (; E1, E2, E3, nu12, nu13, nu23, G12, G13, G23) = material
 
     nu21 = nu12*E2/E1
     nu31 = nu13*E3/E1
@@ -552,12 +550,10 @@ function linearsolve(A::AbstractMatrix{TF}, B; X = similar(B, TF), Afact=nothing
     return Afact, X
 end
 
-
 """
-    compliance_matrix(nodes, elements; cache=initialize_cache(nodes, elements),
-        gxbeam_order=true, shear_center=true)
+    FEM(nodes, elements; cache=initialize_cache(nodes, elements))
 
-Compute compliance matrix given a finite element mesh described by nodes and elements.
+Initialize finite element object.
 
 # Arguments
 - `nodes`: Vector containing all the nodes in the mesh
@@ -565,8 +561,24 @@ Compute compliance matrix given a finite element mesh described by nodes and ele
 - `cache::SectionCache`: A pre-allocated cache which may be passed in to reduce allocations
     across multiple calls to this function when the number of nodes, number of elements, and
     connectivity remain the same.
-- `gxbeam_order::Bool`: Indicates whether the compliance matrix should be provided in the
-    order expected by GXBeam (rather than the internal ordering used by the section analysis)
+"""
+struct FEM{TN, TE, TC} <: CompositeSectionAnalysis
+    nodes::TN
+    elements::TE
+    cache::TC
+end
+
+# if no cache is provided we will create it
+FEM(nodes, elements) = FEM(nodes, elements, initialize_cache(nodes, elements))
+
+
+"""
+    compliance_matrix(fem::FEM, shear_center=true)
+
+Compute compliance matrix given a finite element mesh described by nodes and elements.
+
+# Arguments
+- `fem::FEM`: finite element description (nodes, elements, and cache)
 - `shear_center::Bool`: Indicates whether the compliance matrix should be provided about the
     shear center
 
@@ -578,8 +590,9 @@ Compute compliance matrix given a finite element mesh described by nodes and ele
     (location where an axial force will not produce any bending, i.e., beam will remain
     straight)
 """
-function compliance_matrix(nodes, elements; cache=initialize_cache(nodes, elements),
-    gxbeam_order=true, shear_center=true)
+function compliance_matrix(fem::FEM, shear_center=true)
+
+    (; elements, nodes, cache) = fem
 
     # problem dimensions
     ne = length(elements) # number of elements
@@ -715,9 +728,7 @@ function compliance_matrix(nodes, elements; cache=initialize_cache(nodes, elemen
     end
 
     # --- Change Ordering to Match GXBeam --- #
-    if gxbeam_order
-        S = reorder(S)
-    end
+    S = reorder(S)
 
     return S, sc, tc
 end
@@ -745,15 +756,17 @@ end
 
 
 """
-    mass_matrix(nodes, elements)
+    mass_matrix(fem::FEM)
 
-Compute mass matrix for the structure using GXBeam ordering.
+Compute mass matrix for the section
 
 # Returns
-- `M::Matrix`: mass matrix
+- `M::Matrix`: mass matrix in the order expected by GXBeam.
 - `mc::Vector{float}`: x, y location of mass center
 """
-function mass_matrix(nodes, elements)
+function mass_matrix(fem::FEM)
+
+    (; nodes, elements) = fem
 
     # --- find total mass and center of mass -----
     m = 0.0
@@ -806,12 +819,15 @@ function mass_matrix(nodes, elements)
 end
 
 """
-    plotmesh(nodes, elements, pyplot; plotnumbers=false)
+    plotgeometry(fem::FEM, pyplot; plotnumbers=false)
 
 plot nodes and elements for a quick visualization.
 Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
-function plotmesh(nodes, elements, pyplot; plotnumbers=false)
+function plotgeometry(fem::FEM, pyplot; plotnumbers=false)
+
+    (; nodes, elements) = fem
+
     ne = length(elements)
 
     for i = 1:ne
@@ -933,23 +949,15 @@ end
 end
 
 """
-    strain_recovery(F, M, nodes, elements, cache; gxbeam_order=true)
+    strains_and_stresses(F, M, fem::FEM)
 
 Compute stresses and strains at each element in cross section.
 
 # Arguments
 - `F::Vector(3)`: force at this cross section in x, y, z directions
 - `M::Vector(3)`: moment at this cross section in x, y, z directions
-- `nodes::Vector{Node{TF}}`: all the nodes in the mesh
-- `elements::Vector{MeshElement{TF}}`: all the elements in the mesh
-- `cache::SectionCache`: needs to reuse data from the compliance solve
+- `fem::FEM`: needs to reuse data from the compliance solve
     (thus must initialize cache and pass it to both compliance and this function)
-
-# Keyword Arguments
-- `gxbeam_order=true::Bool`: if true, `F`` and `M` are assumed to be in the
-    local beam axis used by GXBeam (where the beam extends along the x-axis). This
-    also returns beam stresses and strains in the axis order set by GXBeam
-    (e.g. axial stresses would correspond to the `xx` direction, or first index).
 
 # Returns
 - `strain_b::Vector(6, ne)`: strains in beam coordinate system for each element. order: xx, yy, zz, xy, xz, yz
@@ -959,7 +967,9 @@ Compute stresses and strains at each element in cross section.
 - `strain_p::Vector(6, ne)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
 - `stress_p::Vector(6, ne)`: stresses in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
 """
-function strain_recovery(F, M, nodes, elements, cache; gxbeam_order=true)
+function strains_and_stresses(F, M, fem::FEM)
+
+    (; nodes, elements, cache) = fem
 
     # initialize outputs
     T = promote_type(eltype(F), eltype(M))
@@ -970,22 +980,22 @@ function strain_recovery(F, M, nodes, elements, cache; gxbeam_order=true)
     sigma_p = Matrix{T}(undef, 6, ne)
 
     # concatenate forces/moments
-    if gxbeam_order
-        new_idxs = [2,3,1]
-        theta = vcat(SVector{3}(F[new_idxs]), SVector{3}(M[new_idxs])) # convert input loads from GXBeam local frame to stress recovery local frame
-    else
-        theta = vcat(SVector{3}(F), SVector{3}(M))
-    end
+    # if gxbeam_order
+    new_idxs = [2,3,1]
+    theta = vcat(SVector{3}(F[new_idxs]), SVector{3}(M[new_idxs])) # convert input loads from GXBeam local frame to stress recovery local frame
+    # else
+    #     theta = vcat(SVector{3}(F), SVector{3}(M))
+    # end
 
     # indices into global matrices
     idx = cache.idx
 
     # save reordering index
-    if gxbeam_order
-        idx_b = [6, 1, 2, 5, 3, 4]   # zz, xx, yy, yz, xy, xz
-    else
-        idx_b = [1, 2, 6, 3, 4, 5]   # xx, yy, zz, xy, xz, yz
-    end
+    # if gxbeam_order
+    idx_b = [6, 1, 2, 5, 3, 4]   # zz, xx, yy, yz, xy, xz
+    # else
+    #     idx_b = [1, 2, 6, 3, 4, 5]   # xx, yy, zz, xy, xz, yz
+    # end
     idx_p = [6, 1, 2, 4, 5, 3]   # 11, 22, 33, 12, 13, 23
 
     # iterate over elements
@@ -1034,13 +1044,16 @@ end
 
 
 """
-    plotsoln(nodes, elements, soln, pyplot)
+    plotsoln(fem::FEM, soln, pyplot)
 
 plot stress/strain on mesh
 soln could be any vector that is of length # of elements, e.g., sigma_b[3, :]
 Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
-function plotsoln(nodes, elements, soln, pyplot)
+function plotsoln(fem::FEM, soln, pyplot)
+
+    (; nodes, elements) = fem
+
     ne = length(elements)
     nn = length(nodes)
 
@@ -1100,18 +1113,20 @@ end
 # end
 
 """
-    tsai_wu(stress_p, elements)
+    tsai_wu(stress_p, fem::FEM)
 
 Tsai Wu failure criteria
 
 # Arguments
 - `stress_p::vector(6, ne)`: stresses in ply coordinate system
-- `elements::Vector{MeshElement{TF}}`: all the elements in the mesh
+- `fem::FEM`: finite element object
 
 # Returns
 - `failure::vector(ne)`: tsai-wu failure criteria for each element.  fails if >= 1
 """
-function tsai_wu(stress_p, elements)
+function tsai_wu(stress_p, fem::FEM)
+
+    elements = fem.elements
 
     ne = length(elements)
     T = eltype(stress_p)

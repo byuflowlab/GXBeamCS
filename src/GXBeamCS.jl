@@ -1,7 +1,6 @@
 module GXBeamCS
 
 import ForwardDiff
-using UnPack
 using SparseArrays
 using StaticArrays
 using FLOWMath
@@ -11,18 +10,18 @@ using RecipesBase
 
 # from common
 export Material, MaterialPlane, Layer
+export compliance_matrix, mass_matrix, strains_and_stresses, tsai_wu
+export plotmesh, plotsoln
 
 # from fem
-export Node, MeshElement
-export initialize_cache, compliance_matrix, mass_matrix, plotmesh
-export strain_recovery, plotsoln, tsai_wu
-
-# from clt
-export MaterialPlane, BeamSection
-export beamstiffness
+export Node, MeshElement, FEM
+export initialize_cache
 
 # from afmesh
 export afmesh
+
+# from clt
+export BeamSection, CLT
 
 # shared definitions and functions
 include("common.jl")
@@ -30,10 +29,10 @@ include("common.jl")
 # section properties using finite element based approach
 include("fem.jl")
 
-# section properties using classical laminate theory
-include("clt.jl")
-
 # airfoil meshing
 include("afmesh.jl")
+
+# section properties using classical laminate theory
+include("clt.jl")
 
 end
