@@ -55,5 +55,5 @@ See the [documentation](https://flow.byu.edu/GXBeamCS.jl/stable)
 
 ## Related Codes
 
-The finite element cross sectional analysis uses the same underlying theory as in [BECAS](https://becas.dtu.dk), but was written independently to be fast and optimization-friendly.  Free academic licenses are available for BECAS. [PreComp](https://www.nrel.gov/wind/nwtc/precomp.html) is an open source classical lamiante theory implementation and was rewritten in Julia and wrapped as an option in this package.  [VABS](https://analyswift.com/vabs-cross-sectional-analysis-tool-for-composite-beams/) is another popular tool, and is the best of these in terms of analysis accuracy, though is not freely available.
+The finite element cross sectional analysis uses the same underlying theory as in [BECAS](https://becas.dtu.dk), but was written independently to be fast and optimization-friendly.  [PreComp](https://www.nrel.gov/wind/nwtc/precomp.html) is an open source classical lamiante theory implementation and was rewritten in Julia and wrapped as an option in this package.  [VABS](https://analyswift.com/vabs-cross-sectional-analysis-tool-for-composite-beams/) is another popular tool, and is the best of these in terms of analysis accuracy, though is not freely available.
 
