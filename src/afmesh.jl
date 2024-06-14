@@ -751,14 +751,14 @@ function combine_halfs_overlaid(nodesu, elementsu, nodesl, elementsl, nlayers, x
     nnl = length(nodesl)
     neu = length(elementsu)
     nel = length(elementsl)
-    @show neu, nel
+    # @show neu, nel
     if x_te != 0.0 
-        println("intersecting TE")
+        # println("intersecting TE")
         nn = nnu + nnl - nt  # number of nodes
         ne = neu + nel  # number of elements
 
     else
-        println("non-intersecting TE")
+        # println("non-intersecting TE")
         nn = nnu + nnl - nt  # no shared t.e.
         ne = neu + nel #+ nlayers
     end
@@ -779,7 +779,7 @@ function combine_halfs_overlaid(nodesu, elementsu, nodesl, elementsl, nlayers, x
 
     # we retain the same number of elements, but the node numbers have changed on the lower surface
     # first nt-1 elements use the node numbers from the upper surface leading edge
-    @show neu+1:neu+nt-1
+    # @show neu+1:neu+nt-1
     for i = neu+1:neu+nt-1
         j = i - neu  # starts at 1
         nodenum = [nnu+j+1; j+1; j; nnu+j]
@@ -793,13 +793,13 @@ function combine_halfs_overlaid(nodesu, elementsu, nodesl, elementsl, nlayers, x
     #     lastidx = neu + nel  # no shared t.e.
     # end
     lastidx = neu + nel  # no shared t.e.
-    @show neu+nt:lastidx
+    # @show neu+nt:lastidx
     for i = neu+nt:lastidx
         # @show i
         j = i - neu  # element index (starts at nt)
         oldnodenum = elementsl[j].nodenum
         oldnodenum .+= (nnu - nt)  # increase node number by upper surface (minus the ones reused on leading edge)
-        nodenum = [oldnodenum[2]; oldnodenum[1]; oldnodenum[4]; oldnodenum[3]]  # reorder the old nodenumbers since lower surface is flipped (sttart at bottom left, ccw)
+        nodenum = [oldnodenum[2]; oldnodenum[1]; oldnodenum[4]; oldnodenum[3]]  # reorder the old nodenumbers since lower surface is flipped (start at bottom left, ccw)
         elements[i] = MeshElement(nodenum, elementsl[j].material, elementsl[j].theta)
     end
 
@@ -978,7 +978,11 @@ function overlay_webs(nodes, elements, webs, webloc, xu, yu, xl, yl, xiu, yiu, x
         for j = 1:nl  # for each layer in the web
             for k = 1:ne_web  # for each element vertical direction at this x location
                 l = start + k_web + (j-1)
-                nodenum = [l, l+1, l+ne_web+2, l+ne_web+1]
+                nodenum = [l, l+1, l+ne_web+2, l+ne_web+1] #Start top left and go CCW #x, but best so far 
+                # nodenum = [l+1, l+ne_web+2, l+ne_web+1, l] #Start BL and go CCW #x
+                # nodenum = [l+1, l, l+ne_web+1, l+ne_web+2] #Start BL and go CW #x
+                # nodenum = [l, l+ne_web+1, l+ne_web+2, l+1] #Start TL and go CW #x
+                # nodenum = [l+ne_web+2, l+ne_web+1, l, l+1] #Start BR and go CCW #huge bending stiffnesses
                 web_elements[e_web] = MeshElement(nodenum, webs[i][j].material, webs[i][j].theta)
                 e_web += 1
                 k_web += 1
