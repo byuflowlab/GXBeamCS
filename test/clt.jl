@@ -574,6 +574,8 @@ K, _ = stiffness_in_internal_order(S)
 
 @test isapprox(K[1, 1]/1e6, 21.22, atol=1e-2)  # same for open/closed if B = 0
 @test isapprox(K[2, 2]/1e3, 8.530, atol=1e-2)
+
+#Todo: Calculate the stress
 end
 
 
@@ -654,6 +656,15 @@ _, S = stiffness_in_internal_order(S)
 @test isapprox(S[2, 2]/1e-6, 33.91, atol=1e-2)
 @test isapprox(S[3, 3]/1e-6, 55.63, atol=1e-2)
 @test isapprox(S[4, 4]/1e-6, 250.56, atol=1e-2)
+
+loads = zeros(6)
+loads[1] = 24e3
+
+sigma, epsilon, _ = GXBeamCS.clt(laminate, loads)
+
+println("")
+display(epsilon)
+println("")
 
 # TODO: add checks for yc/zc - although these are explicitly checked by EA
 

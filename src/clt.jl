@@ -225,7 +225,7 @@ end
 
 # ------------  CLT for Beams of Laminates -----------------
 
-struct BeamSection{VL, VF}
+struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or SectionRegion, or something like that. Beam section makes it sound like it is a section of a beam (a cross section), not a section of a cross-section.
     laminate::VL  #Vector{Lamina}
     y::VF  # Vector{Float}
     z::VF  # Vector{Float}
@@ -270,18 +270,18 @@ end
 
 function compliance_matrix(clt::CLT, shear_center=true)
 
-    m = length(clt.sections)
+    m = length(clt.sections) #number of sections
 
     Pbar = zeros(4, 4)
     I = zeros(2, 4)
     F = zeros(2, 2)
     A = 0.0
 
-    for i = 1:m
+    for i = 1:m #Iterate over the number of sections
         sec = clt.sections[i]
-        yp = sec.y
+        yp = sec.y #The coordinates of the section
         zp = sec.z
-        n = length(yp)
+        n = length(yp) #The number of points in the section
 
         alpha, beta, delta = laminatecompliance(sec.laminate)
         a = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
@@ -290,22 +290,23 @@ function compliance_matrix(clt::CLT, shear_center=true)
         atinv = (a[2, 2]*a[3, 3] - a[2, 3]^2) / det(a)
         # Atilde = inv(atilde)  # TODO: we only need (1, 1) component so don't need to invert everything
 
-        for k = 2:n
-            ybar = (yp[k-1] + yp[k])/2
+        for k = 2:n #Iterate over the "elements" in the section
+            ybar = (yp[k-1] + yp[k])/2 #The element midpoint
             zbar = (zp[k-1] + zp[k])/2
-            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2)
-            ca = (yp[k] - yp[k-1])/b
-            sa = (zp[k] - zp[k-1])/b
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2) #The length of the element
+            ca = (yp[k] - yp[k-1])/b #The cosine of the angle of the element #Todo: Will this correctly orient elements? Check the math.
+            sa = (zp[k] - zp[k-1])/b #The sine of the angle of the element
+            #Add the element area to the cross section area #TODO: Wait... A is reset at the beginning of the function, so this is like the cumulative area of all the sections? 
             A += 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula)
 
             Rk = [1.0 zbar ybar 0.0;
                 0.0 ca -sa 0.0;
                 0.0 sa ca 0.0;
-                0 0 0 1]
+                0 0 0 1] #Todo: What is this matrix? -> It looks like a rotation matrix, but it is a 4x4 and also has the midpoints on it. 
             omega = 1.0/b*Symmetric([
                     alpha[1, 1] beta[1, 1] 0.0 -beta[1, 3]/2.0;
                     beta[1, 1] delta[1, 1] 0.0 -delta[1, 3]/2.0;
-                    0 0 12.0/(atinv*b^2) 0;
+                    0 0 12.0/(atinv*b^2) 0; #Note: b changes every k iteration, so this must be created every iteration. 
                     -beta[1, 3]/2.0 -delta[1, 3]/2.0 0 delta[3, 3]/4.0])
             # omegainv = inv(omega)
             Pbar += Rk'*(omega\Rk)
@@ -345,6 +346,9 @@ function compliance_matrix(clt::CLT, shear_center=true)
 
     # TODO: move to sc or tc.
 
+    # return S, sc, tc #What does S look like before he nerfs it? -> 4x4 symmetric... could have looked above to figure that one out. 
+    
+
     Sfull = zeros(6, 6)
     idx = [1, 5, 6, 4]
     for i = 1:4
@@ -352,10 +356,139 @@ function compliance_matrix(clt::CLT, shear_center=true)
             Sfull[idx[i], idx[j]] = S[i, j]
         end
     end
+
+    s, S, ysc, zsc = shearflow_general_attempt(clt.sections, Wbar, F, L, yc, zc) 
+    Sfull[2, 2] = s[1, 1]
+    Sfull[3, 3] = s[2, 2]
+    # Sfull[2, 2] = s[2, 2]
+    # Sfull[3, 3] = s[1, 1]
+
+
     Sfull = Symmetric(Sfull)
 
-    # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
+    
+    
     return Sfull, sc, tc
+end
+
+function laminate_loads(clt::CLT, forces, moments)
+    m = length(clt.sections) #number of sections
+
+    Pbar = zeros(4, 4)
+    I = zeros(2, 4)
+    F = zeros(2, 2)
+    A = 0.0
+
+    for i = 1:m #Iterate over the number of sections
+        sec = clt.sections[i]
+        yp = sec.y #The coordinates of the section
+        zp = sec.z
+        n = length(yp) #The number of points in the section
+
+        alpha, beta, delta = laminatecompliance(sec.laminate)
+        a = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+                 beta[1, 1] delta[1, 1] delta[1, 3];
+                 beta[1, 3] delta[1, 3] delta[3, 3]]) #mu_k
+        atinv = (a[2, 2]*a[3, 3] - a[2, 3]^2) / det(a)
+        # Atilde = inv(atilde)  # TODO: we only need (1, 1) component so don't need to invert everything
+
+        for k = 2:n #Iterate over the "elements" in the section
+            ybar = (yp[k-1] + yp[k])/2 #The element midpoint
+            zbar = (zp[k-1] + zp[k])/2
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2) #The length of the element
+            ca = (yp[k] - yp[k-1])/b #The cosine of the angle of the element #Todo: Will this correctly orient elements? Check the math.
+            sa = (zp[k] - zp[k-1])/b #The sine of the angle of the element
+            #Add the element area to the cross section area #TODO: Wait... A is reset at the beginning of the function, so this is like the cumulative area of all the sections? 
+            A += 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula)
+
+            Rk = [1.0 zbar ybar 0.0;
+                0.0 ca -sa 0.0;
+                0.0 sa ca 0.0;
+                0 0 0 1] #Todo: What is this matrix? -> It looks like a rotation matrix, but it is a 4x4 and also has the midpoints on it. 
+            omega = 1.0/b*Symmetric([
+                    alpha[1, 1] beta[1, 1] 0.0 -beta[1, 3]/2.0;
+                    beta[1, 1] delta[1, 1] 0.0 -delta[1, 3]/2.0;
+                    0 0 12.0/(atinv*b^2) 0; #Note: b changes every k iteration, so this must be created every iteration. 
+                    -beta[1, 3]/2.0 -delta[1, 3]/2.0 0 delta[3, 3]/4.0])
+            # omegainv = inv(omega)
+            Pbar += Rk'*(omega\Rk)
+
+            I1 = [alpha[1, 3] beta[3, 1] 0.0 -beta[3, 3]/2.0;
+                  beta[1, 2] delta[1, 2] 0.0 -delta[2, 3]/2.0]
+            I += I1*(omega\Rk)  # repeated, could cache
+
+            F1 = [alpha[3, 3] beta[3, 2];
+                 beta[3, 2] delta[2, 2]]
+            F += b*F1 - I1*(omega\I1')
+
+        end
+
+    end
+    L = -I
+    L[1, 4] += 2*A
+    if clt.closed_section
+        Pbar += L'*(F\L)
+    end
+    Wbar = inv(Symmetric(Pbar))
+    cent = -Symmetric([Wbar[2, 2] Wbar[2, 3]; Wbar[2, 3] Wbar[3, 3]]) \ [Wbar[1, 2]; Wbar[1, 3]]
+    zc = cent[1]; yc = cent[2]
+
+    Finv = inv(F)
+
+    applied_loads = [forces[1], moments[2], moments[3], moments[1]]
+
+    loads = ()
+    
+
+    for i in 1:m
+        sec = clt.sections[i]
+        yp = sec.y #The coordinates of the section
+        zp = sec.z
+        n = length(yp) #The number of points in the section
+
+        alpha, beta, delta = laminatecompliance(sec.laminate)
+        a = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+                 beta[1, 1] delta[1, 1] delta[1, 3];
+                 beta[1, 3] delta[1, 3] delta[3, 3]]) #mu_k
+
+        nu_k = [ alpha[1, 3] beta[1, 2];
+                 beta[3, 1] delta[1, 2];
+                 beta[3, 3] delta[2, 3] ]
+
+
+        mu_inv = inv(a)
+
+        section_loads = zeros(6, n-1)
+        for k in 2:n
+            Nen, Mn = Finv*L*Wbar*applied_loads
+
+            ybar = (yp[k-1] + yp[k])/2 #The element midpoint
+            zbar = (zp[k-1] + zp[k])/2
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2) #The length of the element
+            ca = (yp[k] - yp[k-1])/b #The cosine of the angle of the element #Todo: Will this correctly orient elements? Check the math.
+            sa = (zp[k] - zp[k-1])/b #The sine of the angle of the element 
+
+            Rk = [1.0 zbar ybar 0.0;
+                0.0 ca -sa 0.0;
+                0.0 sa ca 0.0;
+                0 0 0 1]
+
+            # eta = zbar
+            eta = 0.0
+            Reta = [1.0 0.0 eta 0.0;
+                    0.0 1.0 0.0 0.0;
+                    0.0 0.0 0.0 -2.0]
+
+
+            Ne, Me, Men = mu_inv*(Reta*Rk - nu_k*Finv*L)*Wbar*applied_loads
+
+            section_loads[:, k-1] = [0.0, Ne, Nen, Mn, Me, Men]
+        end
+
+        loads = (loads..., section_loads)
+    end
+    
+    return loads
 end
 
 

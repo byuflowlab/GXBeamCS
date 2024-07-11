@@ -946,7 +946,7 @@ function mesh_cylinder(r, materials, material_idx; plyangles=zeros(length(r)-1),
                 ip = i
             end
             
-            material = materials[material_idx[j]] #Extract the correct material
+            material = materials[material_idx[j]] #Extract the material
 
             elements[n] = MeshElement([nr*ip+j, nr*(i-1)+j, nr*(i-1)+j+1, nr*ip+j+1], material, plyangles[j])
             n += 1
@@ -960,7 +960,7 @@ end
 """
     parse_BECAS(path)
 
-Convert BECAS input files (N2D.in, E2D.in, EMAT.in, MATPROPS.in) into a vector of `GXBeam.GXBeamCS.Node` and a vector `GXBeam.GXBeamCS.MeshElement`.
+Convert BECAS input files (N2D.in, E2D.in, EMAT.in, MATPROPS.in) into a vector of `Node` and a vector `MeshElement`.
 
 **Arguments**
 - path::String - The path to the BECAS input files.
@@ -984,20 +984,20 @@ function parse_BECAS(path; n2dfilename="N2D.in", e2dfilename="E2D.in", ematfilen
     #Read in the material properties
     #E1 E2 E3 G12 G13 G23 nu12 nu13 nu23 rho
     mats = readdlm(joinpath(path, matpropsfilename))
-    mat_vec = [GXBeam.GXBeamCS.Material(mats[i,:]...) for i in 1:size(mats, 1)]
+    mat_vec = [Material(mats[i,:]...) for i in 1:size(mats, 1)]
 
 
-    #Create the GXBeam nodes
-    nodes = Vector{GXBeam.GXBeamCS.Node{Float64}}(undef, num_nodes)
+    #Create the GXBeamCA nodes
+    nodes = Vector{Node{Float64}}(undef, num_nodes)
     for i in 1:num_nodes
-        nodes[i] = GXBeam.GXBeamCS.Node(n2d[i, 2], n2d[i, 3])
+        nodes[i] = Node(n2d[i, 2], n2d[i, 3])
     end
 
-    #Create the GXBeam elements
-    elements = Vector{GXBeam.GXBeamCS.MeshElement{Float64}}(undef, nelem)
+    #Create the GXBeamCS elements
+    elements = Vector{MeshElement{Float64}}(undef, nelem)
     for i in 1:nelem
 
-        #Convert from BECAS to GXBeam node numbering
+        #Convert from BECAS to GXBeamCS node numbering
         veci = vec(e2d[i, 2:5])
         for j in eachindex(veci)
             idx = findfirst(isequal(veci[j]), nodelist)
@@ -1010,7 +1010,7 @@ function parse_BECAS(path; n2dfilename="N2D.in", e2dfilename="E2D.in", ematfilen
         mat_theta = emat[mat_idx, 3]*(pi/180) #Fiber angle
         # mat_phi = emat[mat_idx, 4]*(pi/180) #Fiber plane angle. #Todo: What is this? -> I think GXBeamCS calculates this based on the node order... So I might need to check the order of the nodes in the element list. -> I think I have a function to calculate the angle based on the node order.
 
-        elements[i] = GXBeam.GXBeamCS.MeshElement(veci, mat_vec[material_num], mat_theta)
+        elements[i] = MeshElement(veci, mat_vec[material_num], mat_theta)
     end
 
     return nodes, elements
