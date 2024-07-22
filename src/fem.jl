@@ -186,7 +186,7 @@ end
 """
     rotate_ply_to_element(Q, theta)
 
-Rotate constitutive matrix `Q` by ply angle `theta`
+Rotate stiffness matrix `Q` by ply angle `theta`
 """
 function rotate_ply_to_element(Q, theta)
 
@@ -218,7 +218,7 @@ end
 """
     rotate_element_to_beam(Q, c, s)
 
-Rotate constitutive matrix `Q` by element orientation `beta` where `c = cos(beta)` and
+Rotate stiffness matrix `Q` by element orientation `beta` where `c = cos(beta)` and
 `s = sin(beta)`
 """
 function rotate_element_to_beam(Q, c, s)
@@ -904,7 +904,7 @@ end
 
             #Plot the element numbers
             if showelemnums
-                
+
             end
 
             xi, yi
@@ -929,7 +929,7 @@ end
                 ybar = sum([n.y/4 for n in nodes_local])
 
                 cb, sb = GXBeam.element_orientation(nodes_local)
-    
+
                 seriescolor --> :orange
                 linewidth --> 2
                 label --> false
@@ -940,7 +940,7 @@ end
         end
     end
 
-    # if shownodenums #Todo: 
+    # if shownodenums #Todo:
     #     nn = length(nodes)
     #     for i = 1:nn
     #         annotate!(plt, nodes[i].x*1.1, nodes[i].y*1.1, string(i))

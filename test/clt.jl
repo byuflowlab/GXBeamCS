@@ -1,5 +1,6 @@
 using GXBeamCS
 using Test
+using FLOWMath
 
 function stiffness_in_internal_order(S)
     S2 = S[[1, 4, 5, 6], [1, 4, 5, 6]]  # remove zeros for shear flow
@@ -7,6 +8,15 @@ function stiffness_in_internal_order(S)
     K = K[[1, 3, 4, 2], [1, 3, 4, 2]]  # change from gxbeam order Faxial {Fy, Fz omitted}, torsion, Myy, Mzz to Faxial, Myy, Mzz, torsion
     return K, S2[[1, 3, 4, 2], [1, 3, 4, 2]]
 end
+
+# function stiffness_in_gxbeam_order(S)
+#     S2 = S[[1, 4, 5, 6], [1, 4, 5, 6]]  # remove zeros for shear flow
+#     K2 = inv(S2)
+#     K = zeros(6, 6)
+#     K[[1, 4, 5, 6], [1, 4, 5, 6]] .= K2
+
+#     return K
+# end
 
 #------- Foundations of Classical Laminate Theory, Andreas Öchsner -----
 
@@ -703,7 +713,7 @@ K, _ = stiffness_in_internal_order(W)
 yc = tc[1]; zc = tc[2]
 s, S, ysc, zsc = GXBeamCS.shearflow(sections, K, yc, zc, closedsection=false)
 # S, K, yc, zc, Wbar, F, L = beamstiffness(sections, closedsection=false)
-# s2, S2, ysc2, zsc2 = GXBeamCS.shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
+# s2, S2, ysc2, zsc2 = GXBeamCS.shearflow_general_attempt(sections, clt.cache.Wbar, clt.cache.F, clt.cache.L, yc, zc)
 
 a11 = 5.18e-9
 bf = 50e-3
@@ -756,5 +766,286 @@ syz = 0.0
 @test isapprox(szz/1e-8, s[2, 2]/1e-8, atol=0.05)
 @test isapprox(syz/1e-8, s[1, 2]/1e-8, atol=1e-6)
 
+
+end
+
+
+# Loss of Accuracy Using Smeared Properties in Composite Beam Modeling
+# Ning Liu, Purdue University
+
+@testset "CLT stress. rectangular c.s" begin
+
+# ----- rectangular cross-section ------
+E1 = 41.5e9
+E2 = 7.83e9
+nu12 = 0.3
+G12 = 3.15e9
+rho = 1.0
+mat1 = MaterialPlane(E1, E2, G12, nu12, rho)
+
+t = fill(0.25, 8)  # they said mm in thesis, but units only work out if using meters
+theta = [25.0, 25.0, 50.0, 0, 50, 0, 25, 25]*pi/180
+laminate1 = Layer.(Ref(mat1), t, theta)
+
+b = BeamSection(laminate1, [-2.0, 2], [0.0, 0.0])
+
+closed_section = false
+clt = CLT([b], closed_section)
+
+shear_center = true
+S, _, tc = compliance_matrix(clt, shear_center)
+K = clt_stiffness_matrix(S)
+
+# F = [0.0; 0; 0]
+# M = [-1000.0; 0; 0]
+# # reorder to GXBeam order
+# F = F[[3, 1, 2]]
+# M = M[[3, 1, 2]]
+F = zeros(3)
+M = [0.0, -1e2, 0.0]
+epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, clt)
+
+y = [0.0]
+for i = 1:7
+    y = [y; 0.25*i - 1e-6; 0.25*i + 1e-6]
+end
+y= [y; 0.25*8]
+
+data1 = [
+0.028975009054690637 38.14473513346067
+0.1267656646142703 34.628242119317385
+0.22383194494748315 31.153110802240203
+0.27888446215139484 29.167330035493514
+0.3766751177109746 25.692183743145858
+0.47301702281782 22.217067401339154
+0.5287939152480986 3.6098894974791307
+0.6258601955813113 3.111722149687239
+0.7229264759145239 2.654901523690981
+0.7787033683448025 24.36077737056926
+0.8757696486780152 15.593265663651561
+0.9728359290112282 6.90844740032513
+1.0286128214415062 0.9947130877232127
+1.1256791017747196 0.4965457399313209
+1.2227453821079322 -0.0016216078605637563
+1.27852227453821 -20.75882904509333
+1.3748641796450563 -29.52632577674057
+1.4719304599782688 -38.29383748365823
+1.5277073524085476 -16.712001802166853
+1.6247736327417601 -20.228479841039665
+1.7218399130749735 -23.786304601708117
+1.7776168055052515 -25.81344706552091
+1.8746830858384644 -29.288578382598097
+1.9724737413980438 -32.846418118536995
+]
+
+# using PyPlot
+# close("all"); pygui(true)
+# figure()
+# plot(y, sigma_b[1, :])
+# plot(data1[:, 1], data1[:, 2], "o")
+
+s11mine = linear(y, sigma_b[1, :], data1[:, 1])
+n = length(data1[:, 1])
+for i = 1:n
+    @test isapprox(s11mine[i], data1[i, 2], atol=0.4)
+end
+
+
+data2 = [
+    0.026831036983321233 1.8824542507358295
+    0.1254532269760696 1.765169773493156
+    0.2211747643219727 1.6625805144392833
+    0.27701232777374907 1.618668152540212
+    0.3741841914430747 1.530790107921348
+    0.4713560551124004 1.4429120633024866
+    0.5279187817258886 -8.064232926673204
+    0.6250906453952142 -6.166816853645008
+    0.7222625090645389 -4.357636074734456
+    0.7788252356780276 -0.11478106471014016
+    0.8745467730239305 0.047335558588925686
+    0.971718636693256 0.19475163161712317
+    1.0282813633067436 1.128783112229672
+    1.125453226976069 2.8717874205519816
+    1.2218999274836835 4.673612592245025
+    1.2777374909354606 0.7399943479930133
+    1.3741841914430741 0.9241724608625264
+    1.4720812182741114 1.1230617881670533
+    1.5271936185641768 -0.16350029859658566
+    1.6250906453952139 -0.28814038305676615
+    1.722262509064539 -0.40543019238151157
+    1.7781000725163156 -0.4714013778099968
+    1.87454677302393 -0.6033997355287175
+    1.9724437998549675 -0.7280398199888971
+]
+
+# figure()
+# plot(y, sigma_b[2, :])
+# plot(data2[:, 1], data2[:, 2], "o")
+
+s22mine = linear(y, sigma_b[2, :], data2[:, 1])
+n = length(data2[:, 1])
+for i = 1:n
+    @test isapprox(s22mine[i], data2[i, 2], atol=0.4)
+end
+
+data3 = [
+    0.02900994112760258 2.4119771295010715
+0.1268271911530225 2.265637550457141
+0.22247097118809128 2.126634931192692
+0.2782636572284641 2.053515759766518
+0.3760817952906523 1.9218820696052106
+0.47245065734701713 1.7902377230026847
+0.5283174944575406 -9.05493972672444
+0.6248142338085367 -7.068936074229217
+0.7227566970182837 -5.1417453208232615
+0.7787567396440485 -1.7810394381568955
+0.8751775518513565 -1.05238928512596
+0.97232211402481 -0.338439692757035
+1.028911369046324 0.7796234635298873
+1.1254018921399418 2.6626858938467493
+1.2218950793438648 4.589865990811488
+1.2782578849894701 1.9579274820294676
+1.374679141215163 2.6939305795017146
+1.4718250354437676 3.4299390051945755
+1.528122570386904 -0.2828823364602542
+1.6252142943726444 -0.44393313260741785
+1.7223060183583843 -0.6049839287545806
+1.7780969283252204 -0.7075148779460028
+1.8751886523109609 -0.8685656740931655
+1.971556182312173 -1.022268854019627
+]
+
+# figure()
+# plot(y, sigma_b[4, :])
+# plot(data3[:, 1], data3[:, 2], "o")
+
+s12mine = linear(y, sigma_b[4, :], data3[:, 1])
+n = length(data3[:, 1])
+for i = 1:n
+    @test isapprox(s12mine[i], data3[i, 2], atol=0.4)
+end
+
+end
+
+
+
+# -------- multi-layer composite pipe ----------
+
+@testset "CLT stress.  multi-layer pipe" begin
+
+E1 = 20.59e6
+E2 = 1.42e6
+nu12 = 0.42
+G12 = 0.87e6
+rho = 1.0
+mat1 = MaterialPlane(E1, E2, G12, nu12, rho)
+
+# t = [2.54e-3, 2.54e-3]
+t = [0.1, 0.1]
+theta = [0.0, 90.0]*pi/180
+laminate1 = Layer.(Ref(mat1), t, theta)
+
+theta = [-45, 45]*pi/180
+laminate2 = Layer.(Ref(mat1), t, theta)
+
+# s = 50.8e-3
+# r = 10.16e-3
+s = 2.0
+r = 0.4
+b1 = BeamSection(laminate1, [-s/2, s/2], [-r, -r])
+# figure(); plot([-s/2, s/2], [-r, -r])
+theta = range(-pi/2, pi/2, length=20)
+y = r*cos.(theta)
+z = r*sin.(theta)
+y .+= s/2
+# plot(y, z)
+b2 = BeamSection(laminate2, y, z)
+b3 = BeamSection(laminate1, [s/2, -s/2], [r, r])
+# plot([s/2, -s/2], [r, r])
+theta = range(pi/2, 3*pi/2, length=20)
+y = r*cos.(theta)
+z = r*sin.(theta)
+y .-= s/2
+b4 = BeamSection(laminate2, y, z)
+# plot(y, z)
+
+beams = [b1, b2, b3, b4]
+closed_section = true
+clt = CLT(beams, closed_section)
+
+shear_center = false
+S, _, tc = compliance_matrix(clt, shear_center)
+K = clt_stiffness_matrix(S)
+
+@test isapprox(K[1, 1], 1.03890e7, rtol=0.005)
+@test isapprox(K[4, 4], 6.87060e5, rtol=0.005)
+@test isapprox(K[5, 5], 1.88227e6, rtol=0.005)
+@test isapprox(K[6, 6], 5.38148e6, rtol=0.005)
+
+
+# println("K11 = ", round((K[1, 1]/1.03890e7 - 1)*100, digits=2), "%")
+# println("K44 = ", round((K[4, 4]/6.87060e5 - 1)*100, digits=2), "%")
+# println("K55 = ", round((K[5, 5]/1.88227e6 - 1)*100, digits=2), "%")
+# println("K66 = ", round((K[6, 6]/5.38148e6 - 1)*100, digits=2), "%")
+# println("K14 = ", round((K[1, 4]/9.83566e4 - 1)*100, digits=2), "%")
+
+
+F = [0.0; 0; 0]
+M = [0.0; -1000.0; 0]
+epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, clt)
+
+# extract portion on top
+start = 4 + 19*4 + 1
+s11 = sigma_b[1, start+4-1:-1:start]
+s22 = sigma_b[2, start+4-1:-1:start]
+y = [0.0, 0.1-1e-6, 0.1+1e-6, 0.2]
+
+
+
+data1 = [
+0.00007028112449799367 -0.22500000000000087
+0.025115749192054414 -0.2388888888888897
+0.05001511094884587 -0.2583333333333342
+0.07506054521114758 -0.2750000000000008
+0.0999827931253634 -0.2916666666666675
+0.10003296012332155 -4.413888888888886
+0.12495206414885132 -4.688888888888886
+0.1499213351723392 -4.963888888888886
+0.17489060619582708 -5.238888888888888
+0.20000591591957056 -5.513888888888888
+]
+
+
+# figure()
+# plot(y, s11)
+# plot(data1[:, 1], data1[:, 2]*1e3, "o")
+
+s11mine = linear(y, s11, data1[:, 1])
+for i = 1:length(s11mine)
+    @test isapprox(s11mine[i]/1e3, data1[i, 2], atol=0.02)
+end
+
+data2 = [
+    0.00005049521816367225 0.005689229309128241
+0.024988981632448892 0.06940620969508204
+0.050000540778775575 0.133123266128051
+0.07515811019449115 0.1964241932932616
+0.09980430568061074 0.2601408694911542
+0.10027153854265528 -0.10119074416567281
+0.12496910801244873 -0.10428715048791759
+0.14995903600775481 -0.10717511194120638
+0.17494889640571387 -0.11027121407538987
+0.20008490226775583 -0.11336716411554265
+
+]
+
+# figure()
+# plot(y, s22)
+# plot(data2[:, 1], data2[:, 2]*1e3, "o")
+
+# s22mine = linear(y, s22, data1[:, 1])
+# for i = 1:length(s22mine)
+#     @test isapprox(s22mine[i]/1e3, data2[i, 2], atol=0.02)
+# end
 
 end

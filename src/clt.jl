@@ -60,6 +60,31 @@ function zspacing(laminate)
 end
 
 """
+Same z locations, but doubles them up on the interior so that strain can be computed at either side of the ply.
+"""
+function zspacingdouble_fromz(z)
+
+     # setup new z vector at top and bottom of each ply
+     nz = 2*(length(z)-1)
+     zvec = zeros(nz)
+     zvec[1] = z[1]
+     zvec[end] = z[end]
+     j = 2
+     for i = 2:length(z)-1
+         zvec[j] = z[i]
+         zvec[j+1] = z[i]
+         j += 2
+     end
+
+     return zvec
+end
+
+function zspacingdouble(laminate)
+    z, _ = zspacing(laminate)
+    return zspacingdouble_fromz(z)
+end
+
+"""
 Compute the A, B, D stiffness matrices for a thin laminate
 """
 function laminatestiffnessmatrix(laminate, z)
@@ -112,16 +137,8 @@ function strains(alpha, beta, delta, z, forces)
     kappa = alleps[4:6]
 
     # setup new z vector at top and bottom of each ply
-    nz = 2*(length(z)-1)
-    zvec = zeros(nz)
-    zvec[1] = z[1]
-    zvec[end] = z[end]
-    j = 2
-    for i = 2:length(z)-1
-        zvec[j] = z[i]
-        zvec[j+1] = z[i]
-        j += 2
-    end
+    zvec = zspacingdouble_fromz(z)
+    nz = length(zvec)
 
     epsilonp = zeros(3, nz)
     for i = 1:3
@@ -231,9 +248,25 @@ struct BeamSection{VL, VF}
     z::VF  # Vector{Float}
 end
 
-struct CLT <: CompositeSectionAnalysis
-    sections::Vector{BeamSection}  # a vector of beam sections
+struct CLTCache{TM1, TM2, TM3, TM4}
+    F::TM1
+    L::TM2
+    Wbar::TM3
+    S::TM4
+end
+
+struct CLT{TS, TC} <: CompositeSectionAnalysis
+    sections::TS  # a vector of beam sections
     closed_section::Bool
+    cache::TC
+end
+
+function CLT(sections, closed_section)  # initialize empty cache
+    F = zeros(2, 2)
+    L = zeros(2, 4)
+    Wbar = Symmetric(zeros(4, 4))
+    S = Symmetric(zeros(4, 4))
+    return CLT(sections, closed_section, CLTCache(F, L, Wbar, S))
 end
 
 CLT(sections) = CLT(sections, true)  # default to closed section
@@ -273,7 +306,7 @@ function compliance_matrix(clt::CLT, shear_center=true)
     m = length(clt.sections)
 
     Pbar = zeros(4, 4)
-    I = zeros(2, 4)
+    Im = zeros(2, 4)
     F = zeros(2, 2)
     A = 0.0
 
@@ -312,12 +345,11 @@ function compliance_matrix(clt::CLT, shear_center=true)
 
             I1 = [alpha[1, 3] beta[3, 1] 0.0 -beta[3, 3]/2.0;
                   beta[1, 2] delta[1, 2] 0.0 -delta[2, 3]/2.0]
-            I += I1*(omega\Rk)  # repeated, could cache
+            Im += I1*(omega\Rk)  # repeated, could cache
 
             F1 = [alpha[3, 3] beta[3, 2];
                  beta[3, 2] delta[2, 2]]
             F += b*F1 - I1*(omega\I1')
-
         end
 
         # if i <= 10   #TODO: temporary hack
@@ -325,7 +357,7 @@ function compliance_matrix(clt::CLT, shear_center=true)
         # end
         # A += Asub/2.0
     end
-    L = -I
+    L = -Im
     L[1, 4] += 2*A
     if clt.closed_section
         Pbar += L'*(F\L)
@@ -343,8 +375,6 @@ function compliance_matrix(clt::CLT, shear_center=true)
     sc = [0.0, 0.0]  # TODO
     tc = [yc, zc]
 
-    # TODO: move to sc or tc.
-
     Sfull = zeros(6, 6)
     idx = [1, 5, 6, 4]
     for i = 1:4
@@ -354,10 +384,34 @@ function compliance_matrix(clt::CLT, shear_center=true)
     end
     Sfull = Symmetric(Sfull)
 
+    # move to sc (TODO: tc for now)
+    if shear_center
+        ysc = sc[1]; zsc = sc[2]
+        P = [0 zsc -ysc; -zsc 0 0; ysc 0 0]
+        Hinv = [I P; zeros(3, 3) I]
+        HinvT = [I zeros(3, 3); transpose(P) I]
+        Sfull = Hinv * Sfull * HinvT
+    end
+
+    # save entries in cache for strain evaluation
+    clt.cache.F .= F
+    clt.cache.L .= L
+    clt.cache.Wbar .= Wbar
+    clt.cache.S .= S
+
     # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
     return Sfull, sc, tc
 end
 
+function clt_stiffness_matrix(Sfull)
+
+    S2 = Sfull[[1, 4, 5, 6], [1, 4, 5, 6]]  # remove zeros for shear flow
+    K2 = inv(S2)
+    K = zeros(6, 6)
+    K[[1, 4, 5, 6], [1, 4, 5, 6]] .= K2
+
+    return K
+end
 
 # ---- alternative (simpler) methods for orthotropic, no longer used ------------
 function centroid(beamsections)
@@ -478,6 +532,230 @@ function beamstiffnessold(beamsections)
 end
 
 # --------------------------------------
+
+
+
+
+# --------- strains ----------------
+
+
+
+
+"""
+from double prime (e1, e2, e3) to primed c.s.
+"""
+function clt_Ttheta(theta)
+
+    s, c = sincos(theta)
+
+    c2 = c^2
+    s2 = s^2
+    sc = s*c
+
+    Tsigma = @SMatrix [
+        c2    s2    0  -2*sc  0  0;
+        s2    c2    0   2*sc  0  0;
+        0     0     1   0     0  0;
+        sc   -sc    0  c2-s2  0  0;
+        0     0     0   0     c -s;
+        0     0     0   0     s  c;
+    ]
+
+    Teps = @SMatrix [
+        c2    s2    0  -sc   0  0;
+        s2    c2    0   sc   0  0;
+        0     0     1   0    0  0;
+        2*sc -2*sc  0  c2-s2 0  0;
+        0     0     0   0    c -s;
+        0     0     0   0    s  c;
+    ]
+
+    return Tsigma, Teps
+end
+
+
+"""
+from primed to unprimed
+"""
+function clt_Talpha(c, s)
+
+    # s, c = sincos(alpha)
+
+    c2 = c^2
+    s2 = s^2
+    sc = s*c
+
+    Tsigma = @SMatrix [
+        1  0    0  0  0    0;
+        0  c2  s2  0  0  -2*sc;
+        0  s2  c2  0  0   2*sc;
+        0  0    0  c  -s   0;
+        0  0    0  s  c    0;
+        0  sc  -sc 0  0   c2-s2
+    ]
+
+    Teps = @SMatrix [
+        1  0      0   0  0    0;
+        0  c2    s2   0  0   -sc;
+        0  s2    c2   0  0    sc;
+        0  0      0   c  -s   0;
+        0  0      0   s  c    0;
+        0  2*sc -2*sc 0  0   c2-s2
+    ]
+
+    return Tsigma, Teps
+end
+
+
+# """
+# from ply to beam
+# """
+# function rotate_stress_and_strains(sigmap, epsilonp, theta, cosalpha, sinalpha)
+#     Tsigma1, Teps1 = clt_Ttheta(theta)
+#     Tsigma2, Teps2 = clt_Talpha(cosalpha, sinalpha)
+#     println(sigmap)
+#     println(epsilonp)
+#     sigmab = Tsigma2 * Tsigma1 * sigmap
+#     epsilonb = Teps2 * Teps1 * epsilonp
+
+#     return sigmab, epsilonb
+# end
+
+"""
+from laminate to beam
+"""
+function rotate_stress_and_strains(sigmaprime, epsilonprime, cosalpha, sinalpha)
+    Tsigma2, Teps2 = clt_Talpha(cosalpha, sinalpha)
+    sigmab = Tsigma2 * sigmaprime
+    epsilonb = Teps2 * epsilonprime
+
+    return sigmab, epsilonb
+end
+# TODO: create general functions for both methods (CLT and FEA)
+
+
+function strains_and_stresses(F, M, clt::CLT)
+    # map GXBeam forces to internal order
+    Nxbar = F[1]  # deformations due to shear neglected in this method
+    Txbar, Mybar, Mzbar = M
+    FMvec = [Nxbar; Mybar; Mzbar; Txbar]
+
+    # rename for convenience
+    cc = clt.cache
+
+    # number of sections
+    m = length(clt.sections)
+
+    # count how many locations I have to compute strain at
+    ntotal = 0
+    idx = 1
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+    strain_p = zeros(6, ntotal)
+    stress_p = zeros(6, ntotal)
+    strain_b = zeros(6, ntotal)
+    stress_b = zeros(6, ntotal)
+
+    for sec in clt.sections
+        # sec = clt.sections[i]
+        yp = sec.y
+        zp = sec.z
+        n = length(yp)
+
+        alpha, beta, delta = laminatecompliance(sec.laminate)
+        muk = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+            beta[1, 1] delta[1, 1] delta[1, 3]
+            beta[1, 3] delta[1, 3] delta[3, 3]])
+        nuk = [alpha[1, 3] beta[1, 2]
+            beta[3, 1] delta[1, 2]
+            beta[3, 3] delta[2, 3]]
+
+        # z locations to evaluate strain at
+        zlamvec = zspacingdouble(sec.laminate)
+
+        for k = 2:n
+            ybar = (yp[k-1] + yp[k])/2
+            zbar = (zp[k-1] + zp[k])/2
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2)
+            ca = (yp[k] - yp[k-1])/b
+            sa = (zp[k] - zp[k-1])/b
+
+            Rk = [1.0 zbar ybar 0.0;
+                0.0 ca -sa 0.0;
+                0.0 sa ca 0.0;
+                0 0 0 1]
+
+            eta = b/2.0  # computed at midpoint of segment?
+            Reta = [1.0 0 eta 0;
+                    0 1 0 0;
+                    0 0 0 -2]
+
+            # pg 270
+            if clt.closed_section
+                NM1 = cc.F\cc.L*cc.Wbar*FMvec
+                NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]
+            else
+                NM = muk\Reta*Rk*cc.Wbar*FMvec
+                forces = [NM[1]; 0.0; 0.0; NM[2]; 0.0; NM[3]]
+            end
+
+            # convert from forces to strains
+            C = [alpha beta; beta' delta]
+            alleps = C*forces
+
+            epsilonbar = alleps[1:3]
+            kappa = alleps[4:6]
+
+            # combine midplane strain and curvature (local, primed, coordinate system)
+            nz = length(zlamvec)
+            epsilonprime = zeros(3, nz)
+            for ii = 1:3
+                epsilonprime[ii, :] = epsilonbar[ii] .+ kappa[ii]*zlamvec
+            end
+
+            # convert to stresses
+            sigmaprime, sigma_p, epsilon_p = stresses(sec.laminate, epsilonprime)
+
+            # remap from internal representation to common representation
+            # epsilonp is 11, 22, 12 (other 3 components are zero)  TODO: 33 is actually not zero
+            # strain_p::Vector(6, nloc)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+            strain_p[1, idx:idx+nz-1] = epsilon_p[1, :]
+            strain_p[2, idx:idx+nz-1] = epsilon_p[2, :]
+            strain_p[4, idx:idx+nz-1] = epsilon_p[3, :]
+
+            stress_p[1, idx:idx+nz-1] = sigma_p[1, :]
+            stress_p[2, idx:idx+nz-1] = sigma_p[2, :]
+            stress_p[4, idx:idx+nz-1] = sigma_p[3, :]
+
+            # iz = [1, 1]
+            # for iii = 2:length(sec.laminate)*2
+            #     iz = [iz; iii; iii]
+            # end
+
+            # for ir = idx:idx+nz-1
+            #     thetak = sec.laminate[iz[ir - idx + 1]].theta
+            #     stress_b[:, ir], strain_b[:, ir] = rotate_stress_and_strains(stress_p[:, ir], strain_p[:, ir], thetak, ca, sa)
+            # end
+
+            sigma_temp = zeros(6)
+            epsilon_temp = zeros(6)
+            for ir = idx:idx+nz-1
+                sigma_temp[[1, 2, 4]] .= sigmaprime[:, ir-idx+1]
+                epsilon_temp[[1, 2, 4]] .= epsilonprime[:, ir-idx+1]
+                stress_b[:, ir], strain_b[:, ir] = rotate_stress_and_strains(sigma_temp, epsilon_temp, ca, sa)
+            end
+
+            idx += nz
+
+        end
+    end
+
+
+    return strain_b, stress_b, strain_p, stress_p
+end
+
 
 
 
@@ -666,12 +944,12 @@ function shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
             sa = (zp[k] - zp[k-1])/b
 
             # open section shear flow
-            eta += b
+            eta = b/2.0
             Rk = [1.0 zbar ybar 0.0;
                 0.0 ca -sa 0.0;
                 0.0 sa ca 0.0;
                 0 0 0 1]
-            Reta = [1.0 0 eta 0;
+            Reta = [1.0 0 eta 0;  # TODO: this should be local eta, so just b/2 at the center I think
                     0 1 0 0;
                     0 0 0 -2]
 
@@ -721,12 +999,12 @@ function shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
             sa = (zp[k] - zp[k-1])/b
 
             # open section shear flow
-            eta += b
+            eta = b/2.0
             Rk = [1.0 zbar ybar 0.0;
                 0.0 ca -sa 0.0;
                 0.0 sa ca 0.0;
                 0 0 0 1]
-            Reta = [1.0 0 eta 0;
+            Reta = [1.0 0 eta 0;  # TODO: this should be local eta, so just b/2 at the center I think
                     0 1 0 0;
                     0 0 0 -2]
 
@@ -779,4 +1057,3 @@ end
 
 
 # -------------------------------------------------------------
-
