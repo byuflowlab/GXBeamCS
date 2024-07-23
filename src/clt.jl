@@ -647,8 +647,8 @@ function strains_and_stresses(F, M, clt::CLT)
     m = length(clt.sections)
 
     # count how many locations I have to compute strain at
-    ntotal = 0
     idx = 1
+    ntotal = 0
     for i = 1:m
         ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
     end

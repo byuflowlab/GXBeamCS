@@ -902,12 +902,13 @@ end
 
     idx = 585:-1:571
     n = length(idx)
+    x2vec = zeros(n)
     x3vec = zeros(n)
     s11 = zeros(n)
     s22 = zeros(n)
     s12 = zeros(n)
     for i = 1:n
-        _, _, x3vec[i] = GXBeamCS.area_and_centroid_of_element(nodes[elements[idx[i]].nodenum])
+        _, x2vec[i], x3vec[i] = GXBeamCS.area_and_centroid_of_element(nodes[elements[idx[i]].nodenum])
         s11[i] = sigma_b[3, idx[i]]
         s22[i] = sigma_b[1, idx[i]]
         s12[i] = sigma_b[5, idx[i]]
