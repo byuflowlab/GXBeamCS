@@ -1050,6 +1050,73 @@ data2 = [
 
 end
 
+# -------- thin-wall box beam ----------
+
+@testset "CLT stress. box beam" begin
+
+E1 = 20.59e6
+E2 = 1.42e6
+nu12 = 0.42
+G12 = 0.87e6
+rho = 1.0
+mat1 = MaterialPlane(E1, E2, G12, nu12, rho)
+
+t = 0.005*ones(6)
+theta = [15, 15, 15, 15, 15, 15]*pi/180
+laminate1 = Layer.(Ref(mat1), t, theta)
+
+theta = [15, -15, 15, -15, 15, -15]*pi/180
+laminate2 = Layer.(Ref(mat1), t, theta)
+
+theta = [-15, -15, -15, -15, -15, -15]*pi/180
+laminate3 = Layer.(Ref(mat1), t, theta)
+
+theta = [-15, 15, -15, 15, -15, 15]*pi/180
+laminate4 = Layer.(Ref(mat1), t, theta)
+
+l = 0.923
+h = 0.5
+b1 = BeamSection(laminate1, [-l/2, l/2], [-h/2, -h/2])
+b2 = BeamSection(laminate2, [l/2, l/2], [-h/2, h/2])
+b3 = BeamSection(laminate3, [l/2, -l/2], [h/2, h/2])
+b4 = BeamSection(laminate4, [-l/2, -l/2], [h/2, -h/2])
+
+beams = [b1, b2, b3, b4]
+closed_section = true
+clt = CLT(beams, closed_section)
+
+shear_center = false
+S, _, tc = compliance_matrix(clt, shear_center)
+K = clt_stiffness_matrix(S)
+
+@test isapprox(K[1, 1], 9.84050e5, rtol=0.005)
+# @test isapprox(K[4, 4], 1.69336e4, rtol=0.005)
+# @test isapprox(K[5, 5], 5.90734e4, rtol=0.005)
+@test isapprox(K[6, 6], 1.41252e5, rtol=0.005)
+
+
+F = [0.0; 0; 0]
+M = [0.0; 0.0; 1000]
+epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, clt)
+
+sigma_left = sigma_b[:, 37:end]
+x2 = [0.0]
+for i = 1:length(t)-1
+    x2 = [x2; sum(t[1:i])-1e-6; sum(t[1:i])+1e-6]
+end
+x2 = [x2; sum(t)]
+
+# figure()
+# plot(x2, sigma_left[1, :]/1e3)
+
+# figure()
+# plot(x2, sigma_left[3, :]/1e3)
+
+# figure()
+# plot(x2, sigma_left[5, :]/1e3)
+
+end
+
 # -------- airfoil ----------
 
 @testset "CLT stress. airfoil" begin
