@@ -135,7 +135,7 @@ alpha, beta, delta = GXBeamCS.laminatecompliancematrix(A, B, D)
 Nx = 1000e3
 forces = [Nx; 0.0; 0.0; 0.0; 0.0; 0.0]
 
-epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forces)
+epsilonbar, kappa, zvec, epsilonp = GXBeamCS.laminatestrains(alpha, beta, delta, laminate, forces)
 
 @test isapprox(epsilonbar[1]*1e3, 2.400948, atol=1e-6)
 @test isapprox(epsilonbar[2]*1e3, -0.701929, atol=1e-6)
@@ -145,7 +145,7 @@ epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forc
 @test isapprox(kappa[3], 0.0, atol=1e-10)
 
 
-sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
+sigmap, sigma, epsilon = GXBeamCS.laminatestresses(laminate, epsilonp)
 
 # using PyPlot
 # close("all"); pygui(true)
@@ -259,7 +259,7 @@ sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
 
 forces = [0.0; 0.0; 0.0; 1000; 0.0; 0.0]
 
-epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forces)
+epsilonbar, kappa, zvec, epsilonp = GXBeamCS.laminatestrains(alpha, beta, delta, laminate, forces)
 
 @test isapprox(epsilonbar[1], 0.0, atol=1e-6)
 @test isapprox(epsilonbar[2], 0.0, atol=1e-6)
@@ -268,7 +268,7 @@ epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forc
 @test isapprox(kappa[2], -0.426461, atol=1e-6)
 @test isapprox(kappa[3], -0.069118, atol=1e-6)
 
-sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
+sigmap, sigma, epsilon = GXBeamCS.laminatestresses(laminate, epsilonp)
 
 
 # figure()
@@ -340,8 +340,8 @@ forces = [1000*1e3; 0.0; 0.0; 0.0; 0.0; 0.0]
 z, h = GXBeamCS.zspacing(laminate)
 A, B, D = GXBeamCS.laminatestiffnessmatrix(laminate, z)
 alpha, beta, delta = GXBeamCS.laminatecompliancematrix(A, B, D)
-epsilonbar, kappa, zvec, epsilonp = GXBeamCS.strains(alpha, beta, delta, z, forces)
-sigmap, sigma, epsilon = GXBeamCS.stresses(laminate, epsilonp)
+epsilonbar, kappa, zvec, epsilonp = GXBeamCS.laminatestrains(alpha, beta, delta, laminate, forces)
+sigmap, sigma, epsilon = GXBeamCS.laminatestresses(laminate, epsilonp)
 
 @test isapprox(A[1, 1]/1e3, 455428.170, atol=1e-3)
 @test isapprox(A[1, 2]/1e3, 133146.612, atol=1e-3)
@@ -1225,10 +1225,10 @@ for i = 1:length(t)-1
 end
 x3 = [x3; 0.0]
 
-figure()
-plot(x3 * 39.3701, sigma_b[1, idxs:idxf] * 0.000145038)  # convert m to in and N/m^2 to psi
+# figure()
+# plot(x3 * 39.3701, sigma_b[1, idxs:idxf] * 0.000145038)  # convert m to in and N/m^2 to psi
 
-figure()
-plot(x3 * 39.3701, sigma_b[2, idxs:idxf] * 0.000145038)  # convert m to in and N/m^2 to psi
+# figure()
+# plot(x3 * 39.3701, sigma_b[2, idxs:idxf] * 0.000145038)  # convert m to in and N/m^2 to psi
 
 end

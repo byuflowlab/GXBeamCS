@@ -62,26 +62,22 @@ end
 """
 Same z locations, but doubles them up on the interior so that strain can be computed at either side of the ply.
 """
-function zspacingdouble_fromz(z)
-
-     # setup new z vector at top and bottom of each ply
-     nz = 2*(length(z)-1)
-     zvec = zeros(nz)
-     zvec[1] = z[1]
-     zvec[end] = z[end]
-     j = 2
-     for i = 2:length(z)-1
-         zvec[j] = z[i]
-         zvec[j+1] = z[i]
-         j += 2
-     end
-
-     return zvec
-end
-
 function zspacingdouble(laminate)
     z, _ = zspacing(laminate)
-    return zspacingdouble_fromz(z)
+
+    # setup new z vector at top and bottom of each ply
+    nz = 2*(length(z)-1)
+    zvec = zeros(nz)
+    zvec[1] = z[1]
+    zvec[end] = z[end]
+    j = 2
+    for i = 2:length(z)-1
+        zvec[j] = z[i]
+        zvec[j+1] = z[i]
+        j += 2
+    end
+
+    return zvec
 end
 
 """
@@ -127,9 +123,9 @@ function laminatecompliance(laminate)
 end
 
 """
-strains for a thin laminate with forces: N1, N1, N12, M1, M2, M12
+strains for a thin laminate with forces: N1, N2, N12, M1, M2, M12
 """
-function strains(alpha, beta, delta, z, forces)
+function laminatestrains(alpha, beta, delta, laminate, forces)
     C = [alpha beta; beta' delta]
 
     alleps = C*forces
@@ -137,7 +133,7 @@ function strains(alpha, beta, delta, z, forces)
     kappa = alleps[4:6]
 
     # setup new z vector at top and bottom of each ply
-    zvec = zspacingdouble_fromz(z)
+    zvec = zspacingdouble(laminate)
     nz = length(zvec)
 
     epsilonp = zeros(3, nz)
@@ -151,7 +147,7 @@ end
 """
 stress for a thin laminate given stresses.
 """
-function stresses(laminate, epsilonp)
+function laminatestresses(laminate, epsilonp)
 
     n = length(laminate)
     sigmap = zeros(3, 2*n)
@@ -181,8 +177,8 @@ function clt(laminate, forces)
     z, h = zspacing(laminate)
     A, B, D = laminatestiffnessmatrix(laminate, z)
     alpha, beta, delta = laminatecompliancematrix(A, B, D)
-    epsilonbar, kappa, zvec, epsilonp = strains(alpha, beta, delta, z, forces)
-    sigmap, sigma, epsilon = stresses(laminate, epsilonp)
+    epsilonbar, kappa, zvec, epsilonp = laminatestrains(alpha, beta, delta, laminate, forces)
+    sigmap, sigma, epsilon = laminatestresses(laminate, epsilonp)
     failure = tsai_wu_plane(sigma, laminate)
 
     return sigma, epsilon, failure
@@ -638,6 +634,7 @@ function strains_and_stresses(F, M, clt::CLT)
     # map GXBeam forces to internal order
     Nxbar = F[1]  # deformations due to shear neglected in this method
     Txbar, Mybar, Mzbar = M
+    Mzbar *= -1  # opposite sign convention used internally
     FMvec = [Nxbar; Mybar; Mzbar; Txbar]
 
     # rename for convenience
@@ -671,9 +668,6 @@ function strains_and_stresses(F, M, clt::CLT)
             beta[3, 1] delta[1, 2]
             beta[3, 3] delta[2, 3]]
 
-        # z locations to evaluate strain at
-        zlamvec = zspacingdouble(sec.laminate)
-
         for k = 2:n
             ybar = (yp[k-1] + yp[k])/2
             zbar = (zp[k-1] + zp[k])/2
@@ -686,7 +680,7 @@ function strains_and_stresses(F, M, clt::CLT)
                 0.0 sa ca 0.0;
                 0 0 0 1]
 
-            eta = b/2.0  # computed at midpoint of segment?
+            eta = 0.0  # just compute at midpoint
             Reta = [1.0 0 eta 0;
                     0 1 0 0;
                     0 0 0 -2]
@@ -695,32 +689,20 @@ function strains_and_stresses(F, M, clt::CLT)
             if clt.closed_section
                 NM1 = cc.F\cc.L*cc.Wbar*FMvec
                 NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
-                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12
             else
                 NM = muk\Reta*Rk*cc.Wbar*FMvec
                 forces = [NM[1]; 0.0; 0.0; NM[2]; 0.0; NM[3]]
             end
 
-            # convert from forces to strains
-            C = [alpha beta; beta' delta]
-            alleps = C*forces
+            _, _, _, epsilonprime = laminatestrains(alpha, beta, delta, sec.laminate, forces)
+            sigmaprime, sigma_p, epsilon_p = laminatestresses(sec.laminate, epsilonprime)
 
-            epsilonbar = alleps[1:3]
-            kappa = alleps[4:6]
-
-            # combine midplane strain and curvature (local, primed, coordinate system)
-            nz = length(zlamvec)
-            epsilonprime = zeros(3, nz)
-            for ii = 1:3
-                epsilonprime[ii, :] = epsilonbar[ii] .+ kappa[ii]*zlamvec
-            end
-
-            # convert to stresses
-            sigmaprime, sigma_p, epsilon_p = stresses(sec.laminate, epsilonprime)
 
             # remap from internal representation to common representation
             # epsilonp is 11, 22, 12 (other 3 components are zero)  TODO: 33 is actually not zero
             # strain_p::Vector(6, nloc)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+            _, nz = size(epsilonprime)
             strain_p[1, idx:idx+nz-1] = epsilon_p[1, :]
             strain_p[2, idx:idx+nz-1] = epsilon_p[2, :]
             strain_p[4, idx:idx+nz-1] = epsilon_p[3, :]
