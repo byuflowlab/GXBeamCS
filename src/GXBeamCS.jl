@@ -35,4 +35,7 @@ include("afmesh.jl")
 # section properties using classical laminate theory
 include("clt.jl")
 
+# meshing tools
+include("meshtools.jl")
+
 end
