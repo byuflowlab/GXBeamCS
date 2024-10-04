@@ -734,6 +734,167 @@ function compliance_matrix(fem::FEM, shear_center=true)
 end
 
 """
+    uncached_compliance_matrix(fem, shear_center=true)
+
+Compute compliance matrix given a finite element mesh described by nodes and elements.
+
+# Arguments
+- `fem::FEM`: finite element description (nodes, elements, and cache)
+- `shear_center::Bool`: Indicates whether the compliance matrix should be provided about the
+    shear center
+
+# Returns
+- `S::Matrix`: compliance matrix
+- `sc::Vector{float}`: x, y location of shear center (location where a transverse/shear
+    force will not produce any torsion, i.e., beam will not twist)
+- `tc::Vector{float}`: x, y location of tension center, aka elastic center, aka centroid
+    (location where an axial force will not produce any bending, i.e., beam will remain
+    straight)
+"""
+function uncached_compliance_matrix(fem, shear_center=true)
+
+    (; elements, nodes, cache) = fem
+
+    # problem dimensions
+    ne = length(elements) # number of elements
+    nn = length(nodes)    # number of nodes
+    ndof = 3 * nn         # 3 displacement dof per node
+
+    # reset global matrices
+    A = cache.A .= 0
+    R = cache.R .= 0
+    E = cache.E .= 0
+    C = cache.C .= 0
+    L = cache.L .= 0
+    M = cache.M .= 0
+
+    # storage for element node indices
+    idx = cache.idx
+
+    # place element matrices in global matrices (scatter)
+    for i = 1:ne
+        # element nodes
+        nodenum = elements[i].nodenum
+        # location in global matrix
+        node2idx!(idx, nodenum)
+        # element submatrix
+        Ae, Re, Ee, Ce, Le, Me = element_submatrix(elements[i], nodes[nodenum])
+        # add to global matrix
+        cache.A .+= Ae
+        @views cache.R[idx, :] .+= Re
+        @views cache.E[idx, idx] .+= Ee
+        @views cache.C[idx, idx] .+= Ce
+        @views cache.L[idx, :] .+= Le
+        @views cache.M[idx, idx] .+= Me
+    end
+
+    # --- Construct and Solve First Linear System --- #
+
+    # construct left hand side: Asys = [E R D; R' A 0 0; D' 0 0]
+    Asys = cache.Asys .= 0
+    Asys[1:ndof, 1:ndof] = E
+    Asys[1:ndof, ndof+1:ndof+6] = R
+    Asys[ndof+1:ndof+6, 1:ndof] = R'
+    Asys[ndof+1:ndof+6, ndof+1:ndof+6] = A
+    for i = 1:nn
+        s = 3*(i-1)
+        Asys[ndof+7, s+1] = Asys[s+1, ndof+7] = 1.0
+        Asys[ndof+8, s+2] = Asys[s+2, ndof+8] = 1.0
+        Asys[ndof+9, s+3] = Asys[s+3, ndof+9] = 1.0
+        Asys[ndof+10, s+3] = Asys[s+3, ndof+10] = nodes[i].y
+        Asys[ndof+11, s+3] = Asys[s+3, ndof+11] = -nodes[i].x
+        Asys[ndof+12, s+1] = Asys[s+1, ndof+12] = -nodes[i].y
+        Asys[ndof+12, s+2] = Asys[s+2, ndof+12] = nodes[i].x
+    end
+
+    # construct right hand side: Tr=zeros(6,6); Tr[1,5]=-1; Tr[2,4]=1; B2 = [0, Tr', 0];
+    B2 = cache.Bsys .= 0
+    B2[ndof+5, 1] = -1.0
+    B2[ndof+4, 2] =  1.0
+
+    # # solve linear system
+    # Afact, X2 = linearsolve(Asys, B2; X = cache.Xsys, Av = cache.Av, Bv = cache.Bv,
+    #     Xv = cache.Xv, Adot = cache.Adot, Bdot = cache.Bdot, Xdot = cache.Xdot)
+
+    X2 = hcat([ImplicitAD.implicit_linear(Asys, B2[:,k]) for k = 1:6]...)
+
+    # extract and save results
+    dX = cache.dX .= view(X2, 1:ndof, :)
+    dY = cache.dY .= view(X2, ndof+1:ndof+6, :)
+
+    # --- Construct and Solve Second Linear System --- #
+
+    # construct right hand side: B1 = [C'-C  L; -L' 0; 0 0]*[dX, dY] + [0, I, 0]
+    # (note that there are a couple errors in the BECAS theory guide for this expression)
+
+    B1 = cache.Bsys .= 0
+
+    mul!(view(B1, 1:ndof, :), C', dX, 1, 1)
+    mul!(view(B1, 1:ndof, :), C, dX, -1, 1)
+    mul!(view(B1, 1:ndof, :), L, dY, 1, 1)
+
+    B1[ndof+1, 1] = 1
+    B1[ndof+2, 2] = 1
+    B1[ndof+3, 3] = 1
+    B1[ndof+4, 4] = 1
+    B1[ndof+5, 5] = 1
+    B1[ndof+6, 6] = 1
+    mul!(view(B1, ndof+1:ndof+6, :), L', dX, -1, 1)
+
+    # solve linear system
+    # _, X1 = linearsolve(Asys, B1; Afact = Afact, X = cache.Xsys, Av = cache.Av, Bv = cache.Bv,
+    #     Xv = cache.Xv, Adot = cache.Adot, Bdot = cache.Bdot, Xdot = cache.Xdot)
+
+    X1 = hcat([ImplicitAD.implicit_linear(Asys, B1[:,k]) for k = 1:6]...)
+
+    # extract and save results
+    X = cache.X .= view(X1, 1:ndof, :)
+    Y = cache.Y .= view(X1, ndof+1:ndof+6, :)
+
+    # --- Compute Compliance Matrix --- #
+
+    # The following is equivalent to the following matrix operation
+    S = hcat(X', dX', Y')*[E C R; C' M L; R' L' A]*vcat(X, dX, Y)
+
+    # use state vector as temporary storage
+    # tmp1 = view(X1, 1:ndof, :)
+    # tmp2 = view(X1, ndof+1:ndof+6, :)
+
+    # S = zero(A)
+    # mul!(S, X', mul!(tmp1, E, X), 1, 1)
+    # mul!(S, X', mul!(tmp1, C, dX), 1, 1)
+    # mul!(S, mul!(tmp2, X', R), Y, 1, 1)
+    # mul!(S, dX', mul!(tmp1, C', X), 1, 1)
+    # mul!(S, dX', mul!(tmp1, M, dX), 1, 1)
+    # mul!(S, mul!(tmp2, dX', L), Y, 1, 1)
+    # mul!(S, Y', mul!(tmp2, R', X), 1, 1)
+    # mul!(S, Y', mul!(tmp2, L', dX), 1, 1)
+    # mul!(S, Y', mul!(tmp2, A, Y), 1, 1)
+
+    # --- Find Shear and Tension Center --- #
+
+    xs = -S[6, 2]/S[6, 6]
+    ys = S[6, 1]/S[6, 6]
+    xt = (S[4, 4]*S[5, 3] - S[4, 5]*S[4, 3])/(S[4, 4]*S[5, 5] - S[4, 5]^2)
+    yt = (-S[4, 3]*S[5, 5] + S[4, 5]*S[5, 3])/(S[4, 4]*S[5, 5] - S[4, 5]^2)
+    sc = [xs, ys]
+    tc = [xt, yt]
+
+    # compute properties about shear center
+    if shear_center
+        P = [0 0 ys; 0 0 -xs; -ys xs 0]
+        Hinv = [I transpose(P); zeros(3, 3) I]
+        HinvT = [I zeros(3, 3); P I]
+        S = Hinv * S * HinvT
+    end
+
+    # --- Change Ordering to Match GXBeam --- #
+    S = reorder(S)
+
+    return S, sc, tc
+end
+
+"""
     area_and_centroid_of_element(node)
 
 Compute area and centroid of an element specified by its four nodes

@@ -4,6 +4,65 @@ Tools to work with the mesh:
 - mesh quality checking
 =#
 
+"""
+    parse_BECAS(path)
+
+Convert BECAS input files (N2D.in, E2D.in, EMAT.in, MATPROPS.in) into a vector of `Node` and a vector `MeshElement`.
+
+**Arguments**
+- path::String - The path to the BECAS input files.
+
+"""
+function parse_BECAS(path; n2dfilename="N2D.in", e2dfilename="E2D.in", ematfilename="EMAT.in", matpropsfilename="MATPROPS.in")
+    
+    #Read in the node data
+    n2d = readdlm(joinpath(path, n2dfilename))
+    nodelist = Int.(n2d[:, 1]) #The BECAS node numbers
+    num_nodes = length(nodelist)
+
+    #Read in the element set data (what nodes belong to what element)
+    e2d = readdlm(joinpath(path, e2dfilename), Int)
+    elementlist = Int.(e2d[:, 1]) #The BECAS element numbers
+    nelem = length(elementlist)
+
+    #Read in the material data for each element
+    emat = readdlm(joinpath(path, ematfilename))
+
+    #Read in the material properties
+    #E1 E2 E3 G12 G13 G23 nu12 nu13 nu23 rho
+    mats = readdlm(joinpath(path, matpropsfilename))
+    mat_vec = [Material(mats[i,:]...) for i in 1:size(mats, 1)]
+
+
+    #Create the GXBeamCA nodes
+    nodes = Vector{Node{Float64}}(undef, num_nodes)
+    for i in 1:num_nodes
+        nodes[i] = Node(n2d[i, 2], n2d[i, 3])
+    end
+
+    #Create the GXBeamCS elements
+    elements = Vector{MeshElement{Float64}}(undef, nelem)
+    for i in 1:nelem
+
+        #Convert from BECAS to GXBeamCS node numbering
+        veci = vec(e2d[i, 2:5])
+        for j in eachindex(veci)
+            idx = findfirst(isequal(veci[j]), nodelist)
+            veci[j] = idx
+        end
+
+        element_idx = e2d[i, 1] #Extract the BECAS element number
+        mat_idx = findfirst(isequal(element_idx), emat[:, 1]) #Find the row in the emat matrix that corresponds to the element number
+        material_num = Int(emat[mat_idx, 2]) #The material number for the element
+        mat_theta = emat[mat_idx, 3]*(pi/180) #Fiber angle
+        # mat_phi = emat[mat_idx, 4]*(pi/180) #Fiber plane angle. #Todo: What is this? -> I think GXBeamCS calculates this based on the node order... So I might need to check the order of the nodes in the element list. -> I think I have a function to calculate the angle based on the node order.
+
+        elements[i] = MeshElement(veci, mat_vec[material_num], mat_theta)
+    end
+
+    return nodes, elements
+end
+
 
 ### ----- Mesh deformation ----- ###
 #=
@@ -116,7 +175,7 @@ Given a node in the global reference frame, find the vector `k` that will stretc
 - `O::Array{Float64}`: The origin of the local reference frame, length 2. 
 - `d::Array{Float64}`: The distance to stretch the node, length 2.
 """
-function find_k(node, O, d; verbose=false)
+function find_k(node::Node, O, d; verbose=false)
     P = [node.x, node.y]
     Pp = P - O #Map the point to the local reference frame.
 
@@ -136,6 +195,25 @@ function find_k(node, O, d; verbose=false)
     return [kx, ky]
 end
 
+function find_k(node, O, d; verbose=false)
+    P = node
+    Pp = P - O #Map the point to the local reference frame.
+
+    kx = d[1]/Pp[1] + 1 #Find the shift. 
+    ky = d[2]/Pp[2] + 1
+
+    if isapprox(Pp[1], 0)
+        kx /= kx #Divide by kx to get kx=1 with type stability. 
+        verbose ? println("X distance to origin is zero, returning kx=1") : nothing
+    end
+
+    if isapprox(Pp[2], 0)
+        ky /= ky
+        verbose ? println("Y distance to origin is zero, returning ky=1") : nothing
+    end
+
+    return [kx, ky]
+end
 
 
 """
@@ -145,7 +223,7 @@ Deform the nodes about an origin `O` by a factor `k`. `k`` is a 2D vector.
 The origin `O` is the origin of a local reference frame (parallel with the global frame),
 i.e. a point in the mesh that is not moved.
 """
-function stretch_mesh(node, O, k)
+function stretch_mesh(node::Node, O, k)
 
     
     x = O[1] + k[1] * (node.x - O[1])
@@ -157,6 +235,10 @@ function stretch_mesh(node, O, k)
     return Node(x, y)
 end
 
+function stretch_mesh(node, O, k)
+    node[1] = O[1] + k[1] * (node[1] - O[1])
+    node[2] = O[2] + k[2] * (node[2] - O[2])
+end
 
 
 """
@@ -336,7 +418,7 @@ function does_quadrilateral_hourglass(quadrilateral)
 
     (p1, p2, p3, p4) = quadrilateral
 
-    # Check intersections between non-adjacent sides
+    # Check intersections between non-adjacent sides #Todo: Does this cover all the cases? 
     if segments_intersect(p1, p2, p3, p4) || segments_intersect(p2, p3, p4, p1)
         return true
     end
@@ -349,7 +431,7 @@ end
 
 Check if the mesh has any hourglassing elements.
 """
-function check_mesh_hourglass(nodes, elements)
+function check_mesh_hourglass(nodes, elements) #todo: I bet I could easily convert the check functions to use Nodes... and be faster. 
     vec = zeros(Bool, length(elements))
 
     for j in eachindex(elements)
@@ -372,136 +454,63 @@ function check_mesh_hourglass(fem)
 end
 
 
-####--------------- ChatGPT 4.0 code ----------- ###
-# using LinearAlgebra
 
-# Helper function to check if two line segments intersect
-function segments_intersect2(p1, p2, p3, p4)
-    # Vector cross product
-    function cross(v1, v2)
-        return v1[1] * v2[2] - v1[2] * v2[1]
-    end
-
-    # Check if point q lies on line segment pr
-    function on_segment(p, q, r)
-        return min(p[1], r[1]) ≤ q[1] ≤ max(p[1], r[1]) && min(p[2], r[2]) ≤ q[2] ≤ max(p[2], r[2])
-    end
-
-    # Directions for the segments
-    d1 = cross(p4 - p3, p1 - p3)
-    d2 = cross(p4 - p3, p2 - p3)
-    d3 = cross(p2 - p1, p3 - p1)
-    d4 = cross(p2 - p1, p4 - p1)
-
-    if d1 * d2 < 0 && d3 * d4 < 0
-        return true
-    elseif d1 == 0 && on_segment(p3, p1, p4)
-        return true
-    elseif d2 == 0 && on_segment(p3, p2, p4)
-        return true
-    elseif d3 == 0 && on_segment(p1, p3, p2)
-        return true
-    elseif d4 == 0 && on_segment(p1, p4, p2)
-        return true
-    else
-        return false
-    end
+function get_edges(polygon)
+    n = length(polygon)
+    return [(polygon[i], polygon[i % n + 1]) for i in 1:n]
 end
 
-# Main function to check if a polygon is self-intersecting
-function is_self_intersecting(polygon)
-    n = length(polygon)
-    for i in 1:n
-        for j in i+2:n
-            if j != i % n + 1 && segments_intersect2(polygon[i], polygon[i % n + 1], polygon[j], polygon[j % n + 1])
+function points_colocated(p1, p2)
+    return isapprox(p1[1], p2[1]) && isapprox(p1[2], p2[2])
+end
+
+function polygons_intersect(polygon1, polygon2)
+    edges1 = get_edges(polygon1)
+    edges2 = get_edges(polygon2)
+
+    for e1 in edges1
+        for e2 in edges2
+            if segments_intersect(e1[1], e1[2], e2[1], e2[2])
+                if points_colocated(e1[1], e2[1]) || points_colocated(e1[1], e2[2]) || points_colocated(e1[2], e2[1]) || points_colocated(e1[2], e2[2])
+                    continue
+                end
+                
                 return true
             end
         end
     end
+
     return false
 end
 
-# Example usage
-# polygon = [[0, 0], [4, 0], [4, 4], [0, 4], [2, 2]]
-# println(is_self_intersecting(polygon))  # Should print true for a self-intersecting polygon
+function check_mesh_intersect(nodes, elements)
+    vec = zeros(Bool, length(elements))
 
+    for j in eachindex(elements)
+        element = elements[j]
+        points = [[nodes[i].x, nodes[i].y] for i in element.nodenum]
 
+        if j == 1
+            idxs = 2:length(elements)
+        elseif j < length(elements)
+            idxs = [1:j-1; j+1:length(elements)]
+        else
+            idxs = 1:length(elements)-1
+        end
 
-# using DataStructures
+        for k in idxs
+            element2 = elements[k]
+            points2 = [[nodes[i].x, nodes[i].y] for i in element2.nodenum]
 
-# # Define a structure for an event
-# struct Event
-#     point::Tuple{Float64, Float64}
-#     edge_index::Int
-#     event_type::Symbol  # :left or :right
-# end
+            vec[j] = polygons_intersect(points, points2)
+        end
+    end
 
-# # Compare events by their x-coordinates, breaking ties by y-coordinates
-# function Base.isless(e1::Event, e2::Event)
-#     if e1.point[1] == e2.point[1]
-#         return e1.point[2] < e2.point[2]
-#     else
-#         return e1.point[1] < e2.point[1]
-#     end
-# end
+    return vec
+end
 
-# # Helper function to check if two line segments intersect
-# function segments_intersect(p1, p2, p3, p4)
-#     function orientation(p, q, r)
-#         val = (q[2] - p[2]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[2] - q[2])
-#         return val == 0 ? 0 : (val > 0 ? 1 : 2)
-#     end
+function rotate_points(xy, theta, origin=[0,0])
+    R = [cos(theta) -sin(theta); sin(theta) cos(theta)]
 
-#     o1 = orientation(p1, p2, p3)
-#     o2 = orientation(p1, p2, p4)
-#     o3 = orientation(p3, p4, p1)
-#     o4 = orientation(p3, p4, p2)
-
-#     if o1 != o2 && o3 != o4
-#         return true
-#     end
-
-#     return false
-# end
-
-# # Main function to check if a polygon is self-intersecting using Bentley-Ottmann algorithm
-# function is_self_intersecting(polygon)
-#     n = length(polygon)
-#     events = PriorityQueue{Event, Float64}()
-
-#     # Insert all segment endpoints as events
-#     for i in 1:n
-#         p1 = polygon[i]
-#         p2 = polygon[i % n + 1]
-#         if p1[1] <= p2[1]
-#             push!(events, Event(p1, i, :left) => p1[1])
-#             push!(events, Event(p2, i, :right) => p2[1])
-#         else
-#             push!(events, Event(p2, i, :left) => p2[1])
-#             push!(events, Event(p1, i, :right) => p1[1])
-#         end
-#     end
-
-#     status = SortedDict{Int, Int}()
-    
-#     while !isempty(events)
-#         event, _ = dequeue(events)
-#         p, i, etype = event.point, event.edge_index, event.event_type
-#         if etype == :left
-#             status[i] = p[2]
-#             for (j, _) in status
-#                 if j != i && segments_intersect(polygon[i], polygon[i % n + 1], polygon[j], polygon[j % n + 1])
-#                     return true
-#                 end
-#             end
-#         else
-#             delete!(status, i)
-#         end
-#     end
-
-#     return false
-# end
-
-# # Example usage
-# polygon = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [2.0, 2.0]]
-# println(is_self_intersecting(polygon))  # Should print true for a self-intersecting polygon
+    return (R * (xy - origin) + origin)
+end

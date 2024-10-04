@@ -7,6 +7,7 @@ using FLOWMath
 using LinearAlgebra
 using DelimitedFiles
 using RecipesBase
+using ImplicitAD
 
 # from common
 export Material, MaterialPlane, Layer

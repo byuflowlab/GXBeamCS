@@ -920,13 +920,14 @@ Assumed in order of outermost layer to inner most layer. Note: This is opposite 
 - nt::Int - Number of tangential points (How many elements around the circle). 
 """
 function mesh_cylinder(r, materials, material_idx; plyangles=zeros(length(r)-1), nt::Int=200)
+    TF = eltype(r)
     nr = length(r) #Number of radial points. 
     nn = nr*(nt-1) #Number of nodes
     ne = (nr-1)*(nt-1) #Number of elements
 
 
-    nodes = Vector{Node{Float64}}(undef, nn)
-    elements = Vector{MeshElement{Float64}}(undef, ne)
+    nodes = Vector{Node{TF}}(undef, nn)
+    elements = Vector{MeshElement{TF}}(undef, ne)
     theta = range(0.0, 2*pi, length=nt)
 
     m = 1
@@ -958,60 +959,121 @@ function mesh_cylinder(r, materials, material_idx; plyangles=zeros(length(r)-1),
 end
 
 """
-    parse_BECAS(path)
+    create_edge(x, t, ncells; swap=false, xextra=[], mincelldim=true, tol=1e-8)
 
-Convert BECAS input files (N2D.in, E2D.in, EMAT.in, MATPROPS.in) into a vector of `Node` and a vector `MeshElement`.
+    Creates a mesh of an edge of a box (single layer). 
 
-**Arguments**
-- path::String - The path to the BECAS input files.
-
+**Inputs**
+- `x::Float` - The length of the edge.
+- `t::Float` - The thickness of the edge.
+- `ncells::Int` - The number of cells to create.
+- `swap::Bool=false` - If true, the edge will be created with the thickness in the x-direction. Note that true will rotate the edge 90 degrees, so the plies are in the y-direction.
+- `xextra::Vector{Float}=[]` - Extra points to add to the edge (helps create custom discretization).
+- `mincelldim::Bool=true` - If true, the function will remove any cells that have a dimension less than `tol`.
+- `tol::Float=1e-8` - The tolerance for how close nodes can be before removal.
 """
-function parse_BECAS(path; n2dfilename="N2D.in", e2dfilename="E2D.in", ematfilename="EMAT.in", matpropsfilename="MATPROPS.in")
-    
-    #Read in the node data
-    n2d = readdlm(joinpath(path, n2dfilename))
-    nodelist = Int.(n2d[:, 1]) #The BECAS node numbers
-    num_nodes = length(nodelist)
+function create_edge(x, t, ncells; swap=false, xextra=[], mincelldim=true, tol=1e-8)
 
-    #Read in the element set data (what nodes belong to what element)
-    e2d = readdlm(joinpath(path, e2dfilename), Int)
-    elementlist = Int.(e2d[:, 1]) #The BECAS element numbers
-    nelem = length(elementlist)
+    xedge = collect(range(0, x, length=ncells+1))
+    append!(xedge, xextra)
+    sort!(xedge)
+    unique!(xedge)
 
-    #Read in the material data for each element
-    emat = readdlm(joinpath(path, ematfilename))
+    if mincelldim
+        xdiff = diff(xedge)
 
-    #Read in the material properties
-    #E1 E2 E3 G12 G13 G23 nu12 nu13 nu23 rho
-    mats = readdlm(joinpath(path, matpropsfilename))
-    mat_vec = [Material(mats[i,:]...) for i in 1:size(mats, 1)]
+        if any(abs.(xdiff) .< tol) 
 
-
-    #Create the GXBeamCA nodes
-    nodes = Vector{Node{Float64}}(undef, num_nodes)
-    for i in 1:num_nodes
-        nodes[i] = Node(n2d[i, 2], n2d[i, 3])
-    end
-
-    #Create the GXBeamCS elements
-    elements = Vector{MeshElement{Float64}}(undef, nelem)
-    for i in 1:nelem
-
-        #Convert from BECAS to GXBeamCS node numbering
-        veci = vec(e2d[i, 2:5])
-        for j in eachindex(veci)
-            idx = findfirst(isequal(veci[j]), nodelist)
-            veci[j] = idx
+            idxs = findall(abs.(xdiff) .< tol)
+            # in(1, idxs) ? println("1 found") : nothing
+            in(1, idxs) ? idxs = idxs[2:end] : nothing
+            in(length(xedge)-1, idxs) ? idxs = idxs[1:end-1] : nothing #todo: mildly hacky!!!
+            
+            xedge = deleteat!(xedge, idxs)
         end
-
-        element_idx = e2d[i, 1] #Extract the BECAS element number
-        mat_idx = findfirst(isequal(element_idx), emat[:, 1]) #Find the row in the emat matrix that corresponds to the element number
-        material_num = Int(emat[mat_idx, 2]) #The material number for the element
-        mat_theta = emat[mat_idx, 3]*(pi/180) #Fiber angle
-        # mat_phi = emat[mat_idx, 4]*(pi/180) #Fiber plane angle. #Todo: What is this? -> I think GXBeamCS calculates this based on the node order... So I might need to check the order of the nodes in the element list. -> I think I have a function to calculate the angle based on the node order.
-
-        elements[i] = MeshElement(veci, mat_vec[material_num], mat_theta)
     end
 
-    return nodes, elements
+    nx = length(xedge)
+    npoints = 2*nx
+    ncells = nx - 1
+
+    xy = zeros(npoints, 2)
+
+    k = 1
+    for i = 1:2:(npoints-1)
+        xy[i, 1] = xedge[k]
+        xy[i, 2] = 0.0
+        xy[i+1, 1] = xedge[k]
+        xy[i+1, 2] = t
+        k += 1
+    end
+
+    nodenums = zeros(Int, ncells, 4)
+    nodenums[:, 1] = 1:2:2*ncells
+    nodenums[:, 2] = 3:2:npoints
+    nodenums[:, 3] = 4:2:npoints
+    nodenums[:, 4] = 2:2:2*ncells
+
+    if swap
+        xy[:, 1], xy[:, 2] = xy[:, 2], xy[:, 1]
+
+        for i = 1:ncells
+            nodenums[i, 2], nodenums[i, 3] = nodenums[i, 3], nodenums[i, 2] #Swap the inner nodes
+            nodenums[i, 1], nodenums[i, 4] = nodenums[i, 4], nodenums[i, 1] #Swap the outer nodes
+        end
+    end
+    return xy, nodenums
+end
+
+function mesh_box(w, h, tt, tb, tl, tr, nw, nh)
+
+    ### Create edges
+    xy1, nn1 = GXBeamCS.create_edge(w, tb, nw, xextra=[tl, w-tr]) #Bottom
+    xy2, nn2 = GXBeamCS.create_edge(h-(tb+tt), tl, nh; swap=true) # Left
+    xy3, nn3 = GXBeamCS.create_edge(h-(tb+tt), tr, nh; swap=true) #Right
+    xy4, nn4 = GXBeamCS.create_edge(w, tt, nw, xextra=[tl, w-tr]) #Top
+
+    ### Shift the edges 
+    xy2[:,2] .+= tb #Left up
+    xy3[:,1] .+= w - tr #Right over
+    xy3[:,2] .+= tb #Right up
+    xy4[:,2] .+= h - tb #Top up
+
+    ### Shift the nn indices 
+    np1 = size(xy1, 1)
+    nn2 .+= np1 - 2
+    np2 = size(xy2, 1) - 4
+    nn3 .+= np1 + np2 - 2
+    np3 = size(xy3, 1) - 4
+    nn4 .+= np1 + np2 + np3
+
+    ### Fix nn indices for connection
+    ## Bottom Left
+    nn2[1, 1] = nn1[1, 3]
+    nn2[1, 4] = nn1[1, 4]
+    ## Top Left
+    nn2[end, 2] = nn4[1, 2]
+    nn2[end, 3] = nn4[1, 1]
+
+    ## Bottom Right
+    nn3[1, 1] = nn1[end, 3]
+    nn3[1, 4] = nn1[end, 4]
+    ## Top Right
+    nn3[end, 2] = nn4[end, 2]
+    nn3[end, 3] = nn4[end, 1]
+
+    ## Eliminate the repeated points.
+    xy2 = xy2[3:end-2, :] #todo: Could potentially be moved into the vcat, but I don't know if it's worth it.
+    xy3 = xy3[3:end-2, :]
+
+
+    ## Combine the edges 
+    xy = vcat(xy1, xy2, xy3, xy4)
+    nn = vcat(nn1, nn2, nn3, nn4)
+
+    return xy, nn
+end
+
+function mesh_box(w, h, t; nw=10, nh=10)
+    return mesh_box(w, h, t, t, t, t, nw, nh)
 end

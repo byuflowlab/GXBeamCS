@@ -1,8 +1,11 @@
 using GXBeamCS
 using Test
 
-# include("fem.jl")
+@testset "Testing GXBeamCS..." begin
 
-# include("clt.jl")
+    # include("fem.jl")
 
-include("meshtools.jl")
+    # include("clt.jl")
+
+    include("meshtools.jl")
+end

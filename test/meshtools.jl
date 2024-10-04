@@ -86,7 +86,7 @@ using GXBeamCS, Test
         k = GXBeamCS.find_k(n, O, d)
         nn = GXBeamCS.stretch_mesh(n, O, k)
         @test isapprox(nn.x, 1.1)
-        @test isapprox(nn.y, 1.0) #Note: the y value should not change because it lines up with the origin. 
+        @test isapprox(nn.y, 1.0) #Note: the y value should not change because it lines up with the origin. #Todo: Failing.  
 
 
         ### Mesh Translation
@@ -248,6 +248,46 @@ using GXBeamCS, Test
         @test sort(idxs) == [7, 8, 9]
     end
 
-    
+end
+
+@testset "Mesh Quality" begin
+
+    @testset "Cell Area" begin
+        N1 = Node(0.0, 0.0)
+        N2 = Node(1.0, 0.0)
+        N3 = Node(1.0, 1.0)
+        N4 = Node(0.0, 1.0)
+
+        @test isapprox(GXBeamCS.signed_area([N1, N2, N3, N4]), 1.0) #Counter-clockwise
+        @test isapprox(GXBeamCS.signed_area([N1, N4, N3, N2]), -1.0) #clockwise
+    end
+
+    @testset "Cell self-intersection" begin #Checking self-intersection 
+        p1, p2, p3, p4 = (0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)  # Square
+
+        @test !GXBeamCS.does_quadrilateral_hourglass([p1, p2, p3, p4]) #False
+        @test GXBeamCS.does_quadrilateral_hourglass([p1, p2, p4, p3]) #True
+        @test GXBeamCS.does_quadrilateral_hourglass([p1, p3, p2, p4]) #True
+        @test GXBeamCS.does_quadrilateral_hourglass([p1, p3, p4, p2]) #True
+        @test GXBeamCS.does_quadrilateral_hourglass([p1, p4, p2, p3]) #True
+        @test !GXBeamCS.does_quadrilateral_hourglass([p1, p4, p3, p2]) #False
+    end
+
+    @testset "Cell-Cell Intersection" begin
+        polygon1 = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]  # Square
+        polygon2 = [(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]  # Overlapping square
+        polygon3 = [(5.0, 5.0), (9.0, 5.0), (9.0, 9.0), (5.0, 9.0)]  # Non-overlapping square
+        polygon4 = [(0.0, 4.0), (4.0, 4.0), (4.0, 8.0), (0.0, 8.0)]  # Touching square
+        polygon5 = [(2.0, 2.0), (6.0, 0.0), (7.5, 2.0), (4.0, 4.0)]  # Intersecting quad with shared node. 
+
+        @test GXBeamCS.polygons_intersect(polygon1, polygon2)
+        @test !GXBeamCS.polygons_intersect(polygon1, polygon3)
+        @test !GXBeamCS.polygons_intersect(polygon1, polygon4)
+        @test GXBeamCS.polygons_intersect(polygon1, polygon5)
+    end
+
+    @testset "Mesh test" begin
+        @test true #Todo: 
+    end
 
 end
