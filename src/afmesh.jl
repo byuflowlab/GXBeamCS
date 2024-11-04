@@ -972,10 +972,20 @@ end
 - `mincelldim::Bool=true` - If true, the function will remove any cells that have a dimension less than `tol`.
 - `tol::Float=1e-8` - The tolerance for how close nodes can be before removal.
 """
-function create_edge(x, t, ncells; swap=false, xextra=[], mincelldim=true, tol=1e-8)
+function create_edge(x, t, ncells; swap=false, xstart=0.0, xstop=x, xextra=[], mincelldim=true, boxbeam=true, tol=1e-8)
 
-    xedge = collect(range(0, x, length=ncells+1))
+    xedge = collect(range(xstart, xstop, length=ncells+1)) 
     append!(xedge, xextra)
+    if boxbeam
+        if xstart>0
+            xbegin = 0.0
+        end
+        if xstop<x
+            xend = x
+        end
+        pushfirst!(xedge, xbegin)
+        push!(xedge, xend)
+    end
     sort!(xedge)
     unique!(xedge)
 
@@ -997,7 +1007,13 @@ function create_edge(x, t, ncells; swap=false, xextra=[], mincelldim=true, tol=1
     npoints = 2*nx
     ncells = nx - 1
 
-    xy = zeros(npoints, 2)
+    # @show eltype(xedge), typeof(t)
+
+    TF = promote_type(eltype(xedge), typeof(t))
+
+    # @show TF
+
+    xy = zeros(TF, npoints, 2)
 
     k = 1
     for i = 1:2:(npoints-1)
@@ -1008,7 +1024,7 @@ function create_edge(x, t, ncells; swap=false, xextra=[], mincelldim=true, tol=1
         k += 1
     end
 
-    nodenums = zeros(Int, ncells, 4)
+    nodenums = zeros(Int, ncells, 4) #Todo: Does this need parametric typing? 
     nodenums[:, 1] = 1:2:2*ncells
     nodenums[:, 2] = 3:2:npoints
     nodenums[:, 3] = 4:2:npoints
@@ -1027,11 +1043,11 @@ end
 
 function mesh_box(w, h, tt, tb, tl, tr, nw, nh)
 
-    ### Create edges
-    xy1, nn1 = GXBeamCS.create_edge(w, tb, nw, xextra=[tl, w-tr]) #Bottom
-    xy2, nn2 = GXBeamCS.create_edge(h-(tb+tt), tl, nh; swap=true) # Left
-    xy3, nn3 = GXBeamCS.create_edge(h-(tb+tt), tr, nh; swap=true) #Right
-    xy4, nn4 = GXBeamCS.create_edge(w, tt, nw, xextra=[tl, w-tr]) #Top
+    ### Create edges #todo: A way that might work to avoid the problem with mesh not lining up is have the range start from t and go to x-t. But then create_edge would have to be modified. 
+    xy1, nn1 = GXBeamCS.create_edge(w, tb, nw; xstart=tl, xstop=w-tr) #Bottom
+    xy2, nn2 = GXBeamCS.create_edge(h-(tb+tt), tl, nh; swap=true, boxbeam=false) # Left
+    xy3, nn3 = GXBeamCS.create_edge(h-(tb+tt), tr, nh; swap=true, boxbeam=false) #Right
+    xy4, nn4 = GXBeamCS.create_edge(w, tt, nw; xstart=tl, xstop=w-tr) #Top
 
     ### Shift the edges 
     xy2[:,2] .+= tb #Left up
@@ -1076,4 +1092,12 @@ end
 
 function mesh_box(w, h, t; nw=10, nh=10)
     return mesh_box(w, h, t, t, t, t, nw, nh)
+end
+
+function convert_mesh(xy, nn, material, theta)
+    nodes = [Node(xy[i, 1], xy[i, 2]) for i in 1:size(xy, 1)]
+
+    elements = [MeshElement(nn[i, :], material, theta) for i in 1:size(nn, 1)]
+
+    return nodes, elements
 end
