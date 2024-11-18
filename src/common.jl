@@ -117,6 +117,9 @@ Base.eltype(::Type{Layer{TF}}) where {TF} = TF
 Layer{TF}(l::Layer) where {TF} = Layer{TF}(l.material, l.t, l.theta)
 Base.convert(::Type{Layer{TF}}, l::Layer) where {TF} = Layer{TF}(l)
 
+function thickness(layup::Vector{<:Layer})
+    return sum(l.t for l in layup)
+end
 
 # -----------------------------------------------------------
 

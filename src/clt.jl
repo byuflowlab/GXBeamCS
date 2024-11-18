@@ -231,6 +231,71 @@ struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or Se
     z::VF  # Vector{Float}
 end
 
+
+"""
+    get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments)
+
+Creates a vector of BeamSections from the information for the airfoil mesh. 
+
+**Arguments**
+
+"""
+function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima)
+    ### Check that inputs are good. 
+    if length(x) != length(y)
+        throw(ArgumentError("x and y must have the same length"))
+    end
+    #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
+
+    if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
+        throw(ArgumentError("x must start at 0 and end at 1"))
+    end
+    
+    
+
+    ns = length(x) - 1
+    # n = length(xbreak) - 1 #Number of regions
+
+    sections = Vector{BeamSection}(undef, ns) #Todo: Typing
+
+    s, c = sincos(twist) #I think applied twist correctly. 
+    xc = paxis * chord
+    for i = 1:ns #Iterate over the af coordinates and create a sections
+        xbar = (x[i] + x[i+1])/2 #Midpoint of the section
+        idx = findfirst(x ->  x >= xbar, xbreak) - 1 #Find which region of the cross-section the section is. 
+
+        y_i = @. (x[i:i+1]*chord - xc)*c + y[i:i+1]*s + xc
+        z_i = @. -(x[i:i+1] - xc)*s + y[i:i+1].*chord*c
+        # x = nodes[i].x
+        # y = nodes[i].y
+        # nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)
+        sections[i] = BeamSection(segments[idx], y_i, z_i)
+    end
+
+    ### Add in the webs
+    idx = argmin(x) #todo: This might not split the airfoils well. 
+    xtop = reverse(x[1:idx])
+    ytop = reverse(y[1:idx])
+    xbot = x[idx+1:end]
+    ybot = y[idx+1:end]
+    topfit = fit(xtop, ytop)
+    botfit = fit(xbot, ybot)
+
+    websections = Vector{BeamSection}(undef, length(weblocs))
+    for i in eachindex(weblocs)
+        y_i = [weblocs[i], weblocs[i]].*chord
+        ztop = topfit(weblocs[i])
+        zbot = botfit(weblocs[i])
+        z_i = [zbot, ztop].*chord
+        y_i = @. (y_i - xc)*c + z_i*s + xc
+        z_i = @. -(y_i - xc)*s + z_i*c
+        websections[i] = BeamSection(web_segments[i], y_i, z_i)
+    end
+
+    return vcat(sections, websections)
+end
+
+
 struct CLT <: CompositeSectionAnalysis
     sections::Vector{BeamSection}  # a vector of beam sections
     closed_section::Bool

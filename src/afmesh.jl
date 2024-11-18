@@ -726,8 +726,22 @@ end
 
 
 """
+    addwebs(idx_webu, idx_webl, nx_web, nodes, elements, webs, nnu, nl, ne_web=4)
+
 add the nodes and elements for the webs.  given the x locations (by idx) where the webs start
 and the number of grid points in the webs.
+
+**Inputs**
+- `idx_webu, idx_webl::Vector{Int}`: indices where the webs start on the upper and lower surfaces
+- `nx_web::Vector{Int}`: 
+- `nodes::Vector{Node}`: existing nodes
+- `elements::Vector{MeshElement}`: existing elements
+- `webs::Vector{Vector{Layer}}`: webs to add
+- `nnu::Int`: number of nodes on upper surface
+- `nl::Int`: number of layers (in the contoured mesh)
+- `ne_web::Int`: number of elements in the web (default=4)
+
+
 """
 function addwebs(idx_webu, idx_webl, nx_web, nodes, elements, webs, nnu, nl, ne_web=4)
     nt = 1 + nl  # number of points across thickness
@@ -762,7 +776,7 @@ function addwebs(idx_webu, idx_webl, nx_web, nodes, elements, webs, nnu, nl, ne_
     end
 
     # create elements
-    for i = 1:length(nx_web)  # for each web
+    for i = eachindex(nx_web)  # for each web
         start = nn + (i-1)*nx_web[i]*(ne_web-1)
         for j = 1:nx_web[i]-1  # for each x direction in this web
             for k = 1:ne_web  # for each vertical direction in this x location
@@ -833,8 +847,10 @@ function afmesh(xaf, yaf, chord, twist, paxis, xbreak, webloc, segments, webs; d
             # web_TE_loc = 1 - t_TE/(2*chord)
             web_TE_loc = 1 - t_TE/(chord) #Todo: Should probably come up with a better way to define the TE web location.
 
-            push!(webloc, web_TE_loc)
-            push!(webs, web_TE)
+            # push!(webloc, web_TE_loc) 
+            # push!(webs, web_TE)
+            webloc = vcat(webloc, web_TE_loc)
+            webs = vcat(webs, [web_TE])
         end
     end
 
@@ -1100,4 +1116,14 @@ function convert_mesh(xy, nn, material, theta)
     elements = [MeshElement(nn[i, :], material, theta) for i in 1:size(nn, 1)]
 
     return nodes, elements
+end
+
+function max_node(elements)
+    nodenum = [0]
+    for e in elements
+        if maximum(e.nodenum)>nodenum[1]
+            nodenum[1] = maximum(e.nodenum)
+        end
+    end
+    return nodenum[1]
 end
