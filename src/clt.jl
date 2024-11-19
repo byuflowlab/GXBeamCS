@@ -436,6 +436,33 @@ function compliance_matrix(clt::CLT, shear_center=true)
     return Sfull, sc, tc
 end
 
+function mass_matrix(clt::CLT, shear_center=true) #Todo: Finish me!
+    mu = 0.0 #Todo: Typing
+    xm2 = 0.0
+    xm3 = 0.0
+    i22 = 0.0
+    i33 = 0.0
+    i23 = 0.0
+    
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
+        x = abs(diff(sec.y)[1])
+        y = abs(diff(sec.z)[1])
+        L = sqrt(x^2 + y^2)
+        
+        for j in eachindex(sec.laminate)
+
+            # A = 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula) -> Stolen from below. 
+            A = L*sec.laminate[j].t
+
+            mu += A*sec.laminate[j].material.rho
+        end
+    end
+
+
+end
+
+
 function laminate_loads(clt::CLT, forces, moments)
     m = length(clt.sections) #number of sections
 
