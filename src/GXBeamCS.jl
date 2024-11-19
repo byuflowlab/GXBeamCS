@@ -22,7 +22,7 @@ export initialize_cache
 export afmesh
 
 # from clt
-export BeamSection, CLT
+export BeamSection, CLT, clt_stiffness_matrix
 
 # shared definitions and functions
 include("common.jl")

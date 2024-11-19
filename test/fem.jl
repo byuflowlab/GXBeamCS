@@ -2,6 +2,7 @@
 using GXBeamCS, LinearAlgebra, Random, Test
 using ForwardDiff, FiniteDiff
 import GXBeam
+using FLOWMath
 
 function internal_ordering(S)
 
@@ -546,33 +547,6 @@ end
     # println("K66 = ", round((K[6, 6]/5.38987e6 - 1)*100, digits=2), "%")
 end
 
-# borrowing from FLOWMath (just to avoid another dependency for this one off)
-function findindex(xvec, x)
-
-    n = length(xvec)
-    i = searchsortedlast(real(xvec), real(x))
-
-    # this version allows extrapolation
-    if i == 0
-        i = 1
-    elseif i == n
-        i = n - 1
-    end
-
-    return i
-end
-
-function linearinterp(xdata, ydata, x::Number)
-
-    i = findindex(xdata, x)
-
-    eta = (x - xdata[i]) / (xdata[i+1] - xdata[i])
-    y = ydata[i] + eta*(ydata[i+1] - ydata[i])
-
-    return y
-end
-
-linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(ydata), x)
 
 @testset "strain recovery: multi-layer composite pipe" begin
     # Loss of Accuracy Using Smeared Properties in Composite Beam Modeling
@@ -586,15 +560,17 @@ linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(yd
     S, sc, tc = compliance_matrix(fem)
     K = inv(S)
 
+    # F = [0.0; 0; 0]
+    # M = [-1000.0; 0; 0]
+    # # reorder to GXBeam order
+    # F = F[[3, 1, 2]]
+    # M = M[[3, 1, 2]]
     F = [0.0; 0; 0]
-    M = [-1000.0; 0; 0]
-    # reorder to GXBeam order
-    F = F[[3, 1, 2]]
-    M = M[[3, 1, 2]]
+    M = [0.0; -1000.0; 0]
     epsilon_b, sigma_b, epsilon_p, sigma_p = strains_and_stresses(F, M, fem) #nodes, elements, cache; gxbeam_order=false)
     # reorder back from GxBeam order to their order
-    epsilon_b = epsilon_b[[2, 3, 1, 5, 6, 4], :]
-    sigma_b = sigma_b[[2, 3, 1, 5, 6, 4], :]
+    # epsilon_b = epsilon_b[[2, 3, 1, 5, 6, 4], :]
+    # sigma_b = sigma_b[[2, 3, 1, 5, 6, 4], :]
 
 
     # using PyPlot
@@ -633,8 +609,8 @@ linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(yd
     s22 = zeros(n)
     for i = 1:n
         _, _, yvec[i] = GXBeamCS.area_and_centroid_of_element(nodes[elements[idx[i]].nodenum])
-        s11[i] = sigma_b[3, idx[i]]
-        s22[i] = sigma_b[1, idx[i]]
+        s11[i] = sigma_b[1, idx[i]]
+        s22[i] = sigma_b[2, idx[i]]
     end
 
     # data from paper
@@ -653,7 +629,7 @@ linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(yd
 
     # interpolate data onto my pts
     ydata = yvec .- 0.3
-    s11interp = linearinterp(data1[:, 1], data1[:, 2], ydata)
+    s11interp = linear(data1[:, 1], data1[:, 2], ydata)
 
     # figure()
     # plot(ydata, s11/1e3, ".")
@@ -675,7 +651,7 @@ linearinterp(xdata, ydata, x::AbstractVector) = linearinterp.(Ref(xdata), Ref(yd
     0.19999999999999993  -0.11408681408681415
     ]
 
-    s22interp = linearinterp(data2[:, 1], data2[:, 2], ydata)
+    s22interp = linear(data2[:, 1], data2[:, 2], ydata)
 
     # figure()
     # plot(ydata, s22/1e3, ".")
@@ -926,12 +902,13 @@ end
 
     idx = 585:-1:571
     n = length(idx)
+    x2vec = zeros(n)
     x3vec = zeros(n)
     s11 = zeros(n)
     s22 = zeros(n)
     s12 = zeros(n)
     for i = 1:n
-        _, _, x3vec[i] = GXBeamCS.area_and_centroid_of_element(nodes[elements[idx[i]].nodenum])
+        _, x2vec[i], x3vec[i] = GXBeamCS.area_and_centroid_of_element(nodes[elements[idx[i]].nodenum])
         s11[i] = sigma_b[3, idx[i]]
         s22[i] = sigma_b[1, idx[i]]
         s12[i] = sigma_b[5, idx[i]]
@@ -1041,9 +1018,9 @@ end
 
     # interpolate onto data points
     x3 = x3vec .- 4.77
-    s11interp = linearinterp(data11[:, 1], data11[:, 2], x3)
-    s22interp = linearinterp(data22[:, 1], data22[:, 2], x3)
-    s12interp = linearinterp(data12[:, 1], data12[:, 2], x3)
+    s11interp = linear(data11[:, 1], data11[:, 2], x3)
+    s22interp = linear(data22[:, 1], data22[:, 2], x3)
+    s12interp = linear(data12[:, 1], data12[:, 2], x3)
 
 
     # figure()
