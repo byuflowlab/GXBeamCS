@@ -282,7 +282,8 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
         # x = nodes[i].x
         # y = nodes[i].y
         # nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)
-        sections[i] = BeamSection(segments[idx], y_i, z_i)
+        # sections[i] = BeamSection(segments[idx], y_i, z_i)
+        sections[i] = BeamSection(segments[idx], reverse(y_i), reverse(z_i))
     end
 
     ### Add in the webs
@@ -309,10 +310,17 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
 end
 
 
-struct CLT <: CompositeSectionAnalysis
+struct CLT{TC} <: CompositeSectionAnalysis
     sections::Vector{BeamSection}  # a vector of beam sections
     closed_section::Bool
     cache::TC
+end
+
+struct CLTCache{TM1, TM2, TM3, TM4}
+    F::TM1
+    L::TM2
+    Wbar::TM3
+    S::TM4
 end
 
 function CLT(sections, closed_section)  # initialize empty cache
@@ -438,6 +446,8 @@ function compliance_matrix(clt::CLT, shear_center=true)
         end
     end
 
+    clt.cache.S .= S #Todo. Does this S need the effect from the shear flow? -> It looks like shear flow doesn't replace any of the indices in S, so it should be fine.
+
     s, S, ysc, zsc = shearflow_general_attempt(clt.sections, Wbar, F, L, yc, zc) 
     Sfull[2, 2] = s[1, 1]
     Sfull[3, 3] = s[2, 2]
@@ -460,7 +470,7 @@ function compliance_matrix(clt::CLT, shear_center=true)
     clt.cache.F .= F
     clt.cache.L .= L
     clt.cache.Wbar .= Wbar
-    clt.cache.S .= S
+    # clt.cache.S .= S
 
     # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
     return Sfull, sc, tc
@@ -1244,3 +1254,151 @@ end
 
 
 # -------------------------------------------------------------
+
+@recipe function plot_laminate(laminate::Array{TL, 1}, x, y) where {TL<:Layer}
+
+    nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup. 
+    nhat = nhat./norm(nhat)
+
+    nl = length(laminate)
+    np = 2nl + 2
+    xp = zeros(np)
+    yp = zeros(np)
+
+    xp[1:2] = x[1:2]
+    yp[1:2] = y[1:2]
+
+    idx = 1
+    for i in 3:2:np
+        xp[i] = xp[i-2] + nhat[1]*laminate[idx].t
+        xp[i+1] = xp[i-1] + nhat[1]*laminate[idx].t
+
+        yp[i] = yp[i-2] + nhat[2]*laminate[idx].t
+        yp[i+1] = yp[i-1] + nhat[2]*laminate[idx].t
+        idx += 1
+    end
+
+    
+    # Loop through each layer and plot. 
+    for i in 1:nl
+        @series begin
+            j = 2*(i-1)+1
+            idxs = [j, j+1, j+3, j+2, j]
+        
+            xr = xp[idxs]
+            yr = yp[idxs]
+
+            label --> false
+            seriescolor --> :black
+
+            xr, yr
+        end
+    end
+end # End recipe
+
+
+@recipe function plot_section(sections::Array{TB, 1}) where {TB<:BeamSection}
+
+    for i in 1:length(sections) #Loop through all the regions
+        laminate = sections[i].laminate
+        x = sections[i].y
+        y = sections[i].z
+        # x = reverse(sections[i].y) #Didn't flip the side that the laminate is on in the image. 
+        # y = reverse(sections[i].z)
+
+        # nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup.
+        # nhat = [y[2] - y[1], x[2] - x[1]] #Didn't appear to flip the laminate. 
+        # nhat = [y[1] - y[2], x[2] - x[1]] 
+        nhat = [y[2] - y[1], x[1] - x[2]] #Todo: This makes me nervous that what I have in the beam sections is off. 
+
+        nhat = nhat./norm(nhat)
+
+        nl = length(laminate)
+        np = 2nl + 2
+        xp = zeros(np)
+        yp = zeros(np)
+
+        xp[1:2] = x[1:2]
+        yp[1:2] = y[1:2]
+
+        idx = 1
+        for k in 3:2:np
+            xp[k] = xp[k-2] + nhat[1]*laminate[idx].t
+            xp[k+1] = xp[k-1] + nhat[1]*laminate[idx].t
+
+            yp[k] = yp[k-2] + nhat[2]*laminate[idx].t
+            yp[k+1] = yp[k-1] + nhat[2]*laminate[idx].t
+            idx += 1
+        end
+
+        
+        # Loop through each layer and plot. 
+        for k in 1:nl
+            @series begin
+                j = 2*(k-1)+1
+                idxs = [j, j+1, j+3, j+2, j]
+            
+                xr = xp[idxs]
+                yr = yp[idxs]
+
+                label --> false
+                seriescolor --> :black
+
+                xr, yr
+            end
+        end #end looping through laminates
+    end #End looping through sections
+end #End recipe
+
+@recipe function plot_section_solution(sections::Array{TB, 1}, solution::Array{TF, 1}) where {TB<:BeamSection, TF}
+
+    for i in 1:length(sections) #Loop through all the regions
+        laminate = sections[i].laminate
+        x = sections[i].y
+        y = sections[i].z
+        # x = reverse(sections[i].y) #Didn't flip the side that the laminate is on in the image. 
+        # y = reverse(sections[i].z)
+
+        # nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup.
+        # nhat = [y[2] - y[1], x[2] - x[1]] #Didn't appear to flip the laminate. 
+        # nhat = [y[1] - y[2], x[2] - x[1]] 
+        nhat = [y[2] - y[1], x[1] - x[2]] #Todo: This makes me nervous that what I have in the beam sections is off. 
+
+        nhat = nhat./norm(nhat)
+
+        nl = length(laminate)
+        np = 2nl + 2
+        xp = zeros(np)
+        yp = zeros(np)
+
+        xp[1:2] = x[1:2]
+        yp[1:2] = y[1:2]
+
+        idx = 1
+        for k in 3:2:np
+            xp[k] = xp[k-2] + nhat[1]*laminate[idx].t
+            xp[k+1] = xp[k-1] + nhat[1]*laminate[idx].t
+
+            yp[k] = yp[k-2] + nhat[2]*laminate[idx].t
+            yp[k+1] = yp[k-1] + nhat[2]*laminate[idx].t
+            idx += 1
+        end
+
+        
+        # Loop through each layer and plot. 
+        for k in 1:nl
+            @series begin
+                j = 2*(k-1)+1
+                idxs = [j, j+1, j+3, j+2, j]
+            
+                xr = xp[idxs]
+                yr = yp[idxs]
+
+                label --> false
+                seriescolor --> :black
+
+                xr, yr
+            end
+        end #end looping through laminates
+    end #End looping through sections
+end #End recipe
