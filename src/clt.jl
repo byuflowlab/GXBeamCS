@@ -113,7 +113,7 @@ function laminatecompliancematrix(A, B, D)
 end
 
 """
-convenicne method to go from laminate definition to its compliance matrices
+convenience method to go from laminate definition to its compliance matrices
 """
 function laminatecompliance(laminate)
     z, h = zspacing(laminate)
@@ -186,12 +186,12 @@ end
 
 
 
-function tsai_hill(sigma, strength)
-    S1t = strength.S1t
-    S1c = strength.S1c
-    S2t = strength.S2t
-    S2c = strength.S2c
-    S12 = strength.S12
+function tsai_hill(sigma, material)
+    S1t = material.S1t
+    S1c = material.S1c
+    S2t = material.S2t
+    S2c = material.S2c
+    S12 = material.S12
 
     _, n = size(sigma)
     failure = zeros(n)  # fails if > 1
@@ -253,7 +253,7 @@ Creates a vector of BeamSections from the information for the airfoil mesh.
 **Arguments**
 
 """
-function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima)
+function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima, le_idx=argmin(x))
     ### Check that inputs are good. 
     if length(x) != length(y)
         throw(ArgumentError("x and y must have the same length"))
@@ -266,36 +266,52 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     
     
 
-    ns = length(x) - 1
-    # n = length(xbreak) - 1 #Number of regions
+    # le_idx = argmin(x) #Todo: This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
+    xtop = reverse(x[1:le_idx])
+    ytop = reverse(y[1:le_idx]) 
+    xbot = x[le_idx:end] #Todo: I probably need to know if the LE is repeated. 
+    ybot = y[le_idx:end]
+    topfit = fit(xtop, ytop)
+    botfit = fit(xbot, ybot)
+
+    nw = length(web_segments) #Todo: Maybe add multiple points for web? -> Don't know if it changes anything. 
+    nb = length(xbreak)
+    ns = 2*(nb - 1) + nw #Number of regions
 
     sections = Vector{BeamSection}(undef, ns) #Todo: Typing
 
     s, c = sincos(twist) #I think applied twist correctly. 
     xc = paxis * chord
-    for i = 1:ns #Iterate over the af coordinates and create a sections
-        xbar = (x[i] + x[i+1])/2 #Midpoint of the section
-        idx = findfirst(x ->  x >= xbar, xbreak) - 1 #Find which region of the cross-section the section is. 
+    idx_outer_top = 1
+    idx_outer_bot = 1
+    
+    for i = 1:(nb-1) #Iterate over the regions
+        ### Top
+        idx_inner = findfirst(x -> x >= xbreak[i+1], xtop)
+        idx_inner = xtop[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
 
-        y_i = @. (x[i:i+1]*chord - xc)*c + y[i:i+1]*s + xc
-        z_i = @. -(x[i:i+1] - xc)*s + y[i:i+1].*chord*c
-        # x = nodes[i].x
-        # y = nodes[i].y
-        # nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)
-        # sections[i] = BeamSection(segments[idx], y_i, z_i)
-        sections[i] = BeamSection(segments[idx], reverse(y_i), reverse(z_i))
+        y_i = @. (xtop[idx_outer_top:idx_inner]*chord - xc)*c + ytop[idx_outer_top:idx_inner]*s + xc
+        z_i = @. -(xtop[idx_outer_top:idx_inner] - xc)*s + ytop[idx_outer_top:idx_inner].*chord*c
+        
+        sections[i] = BeamSection(segments[i], y_i, z_i)
+
+        idx_outer_top = idx_inner
+
+        ### Bottom
+        idx_inner = findfirst(x -> x >= xbreak[i+1], xbot)
+        idx_inner = xbot[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
+
+        y_i = @. (xbot[idx_outer_bot:idx_inner]*chord - xc)*c + ybot[idx_outer_bot:idx_inner]*s + xc
+        z_i = @. -(xbot[idx_outer_bot:idx_inner] - xc)*s + ybot[idx_outer_bot:idx_inner].*chord*c
+        
+        sections[i+nb-1] = BeamSection(segments[i], y_i, z_i)
+
+        idx_outer_bot = idx_inner
     end
 
-    ### Add in the webs
-    idx = argmin(x) #todo: This might not split the airfoils well. 
-    xtop = reverse(x[1:idx])
-    ytop = reverse(y[1:idx])
-    xbot = x[idx+1:end]
-    ybot = y[idx+1:end]
-    topfit = fit(xtop, ytop)
-    botfit = fit(xbot, ybot)
 
-    websections = Vector{BeamSection}(undef, length(weblocs))
+    ### Add in the webs
+    idx = 2*(nb - 1)
     for i in eachindex(weblocs)
         y_i = [weblocs[i], weblocs[i]].*chord
         ztop = topfit(weblocs[i])
@@ -303,11 +319,66 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
         z_i = [zbot, ztop].*chord
         y_i = @. (y_i - xc)*c + z_i*s + xc
         z_i = @. -(y_i - xc)*s + z_i*c
-        websections[i] = BeamSection(web_segments[i], y_i, z_i)
+        sections[idx + i] = BeamSection(web_segments[i], y_i, z_i)
     end
 
-    return vcat(sections, websections)
+    return sections
 end
+# function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima) #Note: This implementation is closer in some ways and further in others. I'm going with the above implementation because it follows the structur of BeamSections more closely. 
+#     ### Check that inputs are good. 
+#     if length(x) != length(y)
+#         throw(ArgumentError("x and y must have the same length"))
+#     end
+#     #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
+
+#     if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
+#         throw(ArgumentError("x must start at 0 and end at 1"))
+#     end
+    
+    
+
+#     ns = length(x) - 1
+#     # n = length(xbreak) - 1 #Number of regions
+
+#     sections = Vector{BeamSection}(undef, ns) #Todo: Typing
+
+#     s, c = sincos(twist) #I think applied twist correctly. 
+#     xc = paxis * chord
+#     for i = 1:ns #Iterate over the af coordinates and create a sections
+#         xbar = (x[i] + x[i+1])/2 #Midpoint of the section
+#         idx = findfirst(x ->  x >= xbar, xbreak) - 1 #Find which region of the cross-section the section is. 
+
+#         y_i = @. (x[i:i+1]*chord - xc)*c + y[i:i+1]*s + xc
+#         z_i = @. -(x[i:i+1] - xc)*s + y[i:i+1].*chord*c
+#         # x = nodes[i].x
+#         # y = nodes[i].y
+#         # nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)
+#         # sections[i] = BeamSection(segments[idx], y_i, z_i)
+#         sections[i] = BeamSection(segments[idx], reverse(y_i), reverse(z_i))
+#     end
+
+#     ### Add in the webs
+#     idx = argmin(x) #todo: This might not split the airfoils well. 
+#     xtop = reverse(x[1:idx])
+#     ytop = reverse(y[1:idx])
+#     xbot = x[idx+1:end]
+#     ybot = y[idx+1:end]
+#     topfit = fit(xtop, ytop)
+#     botfit = fit(xbot, ybot)
+
+#     websections = Vector{BeamSection}(undef, length(weblocs))
+#     for i in eachindex(weblocs)
+#         y_i = [weblocs[i], weblocs[i]].*chord
+#         ztop = topfit(weblocs[i])
+#         zbot = botfit(weblocs[i])
+#         z_i = [zbot, ztop].*chord
+#         y_i = @. (y_i - xc)*c + z_i*s + xc
+#         z_i = @. -(y_i - xc)*s + z_i*c
+#         websections[i] = BeamSection(web_segments[i], y_i, z_i)
+#     end
+
+#     return vcat(sections, websections)
+# end
 
 
 struct CLT{TC} <: CompositeSectionAnalysis
@@ -845,6 +916,16 @@ end
 # TODO: create general functions for both methods (CLT and FEA)
 
 
+"""
+    strains_and_stresses(F, M, clt::CLT)
+
+Compute strains and stresses in the beam sections.
+
+**Arguments**
+- F::Vector{TF}: forces in the beam
+- M::Vector{TF}: moments in the beam
+- clt::CLT: composite section
+"""
 function strains_and_stresses(F, M, clt::CLT)
     # map GXBeam forces to internal order
     Nxbar = F[1]  # deformations due to shear neglected in this method
@@ -859,18 +940,18 @@ function strains_and_stresses(F, M, clt::CLT)
     m = length(clt.sections)
 
     # count how many locations I have to compute strain at
-    idx = 1
     ntotal = 0
     for i = 1:m
         ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
     end
-    strain_p = zeros(6, ntotal)
+    strain_p = zeros(6, ntotal) #Todo: Will this pass duals? 
     stress_p = zeros(6, ntotal)
     strain_b = zeros(6, ntotal)
     stress_b = zeros(6, ntotal)
 
-    for sec in clt.sections
-        # sec = clt.sections[i]
+    idx = 1
+    for sec in clt.sections #Iterate across the sectinos
+        
         yp = sec.y
         zp = sec.z
         n = length(yp)
@@ -883,7 +964,7 @@ function strains_and_stresses(F, M, clt::CLT)
             beta[3, 1] delta[1, 2]
             beta[3, 3] delta[2, 3]]
 
-        for k = 2:n
+        for k = 2:n #Iterate across the elements in the section
             ybar = (yp[k-1] + yp[k])/2
             zbar = (zp[k-1] + zp[k])/2
             b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2)
@@ -953,7 +1034,34 @@ function strains_and_stresses(F, M, clt::CLT)
     return strain_b, stress_b, strain_p, stress_p
 end
 
+function tsai_wu(stress, clt::CLT)
 
+    m = length(clt.sections)
+
+    # count how many locations I have to compute failure at
+    ntotal = 0
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+
+    failure = zeros(ntotal)
+
+    stress_idx = [1, 2, 4] #Stresses map (1, 2, 4) -> (1, 2, 3)
+    idx = 1
+    for i = 1:m
+        sec = clt.sections[i]
+        for j = 1:length(sec.y)-1
+            nl = length(sec.laminate)
+            idxs = idx:idx+2*nl-1
+            
+            failure[idxs] = tsai_wu_plane(stress[stress_idx, idxs], sec.laminate)
+
+            idx += 2*nl
+        end
+    end
+
+    return failure
+end
 
 
 # ---------- shear flow --------------------
@@ -1255,7 +1363,7 @@ end
 
 # -------------------------------------------------------------
 
-@recipe function plot_laminate(laminate::Array{TL, 1}, x, y) where {TL<:Layer}
+@recipe function plot_laminate(laminate::Array{TL, 1}, x, y) where {TL<:Layer} #Todo: I think I'm going to move the majority of this into a function so it doesn't get repeated so much. 
 
     nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup. 
     nhat = nhat./norm(nhat)
@@ -1297,7 +1405,7 @@ end
 end # End recipe
 
 
-@recipe function plot_section(sections::Array{TB, 1}) where {TB<:BeamSection}
+@recipe function plot_section(sections::TB) where {TB<:BeamSection}
 
     for i in 1:length(sections) #Loop through all the regions
         laminate = sections[i].laminate
@@ -1348,6 +1456,9 @@ end # End recipe
             end
         end #end looping through laminates
     end #End looping through sections
+end #End recipe
+
+@recipe function plot_sections(sections::Array{TB, 1}) where {TB<:BeamSection}
 end #End recipe
 
 @recipe function plot_section_solution(sections::Array{TB, 1}, solution::Array{TF, 1}) where {TB<:BeamSection, TF}
