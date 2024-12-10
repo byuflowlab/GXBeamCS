@@ -1353,34 +1353,39 @@ end
     # end
 end
 
+"""
+    tsai_hill(stress_p, fem::FEM)
 
-# function tsai_hill(sigma, strength)
+Tsai-Hill failure criteria
 
-#     (; S1t, S1c, S2t, S2c, S3t, S3c, S12, S13, S23) = strength
+# Arguments
+- `stress_p::vector(6, ne)`: stresses in ply coordinate system
+- `fem::FEM`: finite element object
 
-#     _, ne = size(sigma)
-#     T = eltype(sigma)
-#     failure = Vector{T}(undef, n)  # fails if > 1
-#     s = Vector{T}(undef, 6)
+# Returns
+- `failure::vector(ne)`: tsai-wu failure criteria for each element.  fails if >= 1
+"""
+function tsai_hill(sigma, fem::FEM)
 
-#     for i = 1:ne
-#         s .= sigma[:, i]
+    elements = fem.elements
 
-#         if s[1] >= 0.0
-#             S1 = S1t
-#         else
-#             S1 = S1c
-#         end
-#         if s[2] >= 0.0
-#             S2 = S2t
-#         else
-#             S2 = S2c
-#         end
-#         failure[i] = s[1]^2/S1^2 + s[2]^2/S2^2 + s[4]^2/S12^2 - s[1]*s[2]/S1^2
-#     end
+    ne = length(elements)
+    T = eltype(sigma)
+    failure = Vector{T}(undef, ne)  # fails if > 1
+    s = Vector{T}(undef, 6)
 
-#     return failure
-# end
+    @views for i = 1:ne
+        s .= sigma[:, i]
+        m = elements[i].material
+        S1 = s[1] >= 0.0 ? m.S1t : m.S1c
+        S2 = s[2] >= 0.0 ? m.S2t : m.S2c
+        S12 = m.S12
+        
+        failure[i] = s[1]^2/S1^2 + s[2]^2/S2^2 + s[4]^2/S12^2 - s[1]*s[2]/S1^2
+    end
+
+    return failure
+end
 
 """
     tsai_wu(stress_p, fem::FEM)
@@ -1418,6 +1423,48 @@ function tsai_wu(stress_p, fem::FEM)
                      s[1]*s[2]/sqrt(m.S1t*m.S1c*m.S2t*m.S2c) -
                      s[1]*s[3]/sqrt(m.S1t*m.S1c*m.S3t*m.S3c) -
                      s[2]*s[3]/sqrt(m.S2t*m.S2c*m.S3t*m.S3c)
+    end
+
+    return failure
+end
+
+
+"""
+    max_stress(stress_p, fem::FEM)
+
+Maximum stress failure criteria
+
+# Arguments
+- `stress_p::vector(6, ne)`: stresses in ply coordinate system
+- `fem::FEM`: finite element object
+
+# Returns
+- `failure::vector(6, ne)`: tsai-wu failure criteria for each element.  fails if >= 1
+"""
+function max_stress(stress_p, fem::FEM)
+
+    elements = fem.elements
+
+    ne = length(elements)
+    T = eltype(stress_p)
+    failure = Array{T, 2}(undef, 6, ne)  # fails if > 1
+    s = Vector{T}(undef, 6)
+
+    @views for i = 1:ne
+        m = elements[i].material
+        s .= stress_p[:, i]
+
+        S1 = s[1] >= 0.0 ? m.S1t : -m.S1c
+        S2 = s[2] >= 0.0 ? m.S2t : -m.S2c
+        S3 = s[3] >= 0.0 ? m.S3t : -m.S3c
+
+        failure[1, i] = s[1]/S1
+        failure[2, i] = s[2]/S2
+        failure[3, i] = s[3]/S3
+        failure[4, i] = sqrt((s[4]/m.S12)^2)
+        failure[5, i] = sqrt((s[5]/m.S13)^2)
+        failure[6, i] = sqrt((s[6]/m.S23)^2)
+
     end
 
     return failure

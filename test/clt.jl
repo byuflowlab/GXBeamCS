@@ -486,12 +486,12 @@ sigmaR[3, :] .*= R
 failure = GXBeamCS.tsai_wu_plane(sigmaR, laminate)
 
 @test isapprox(failure[1], 1.0, atol=1e-2)
-@test isapprox(failure[2], 1.0, atol=1e-2)
-@test isapprox(failure[3], 1.0, atol=1e-2)
-@test isapprox(failure[4], 1.0, atol=1e-2)
-@test isapprox(failure[5], 1.0, atol=1e-2)
-@test isapprox(failure[6], 1.0, atol=1e-2)
-@test isapprox(failure[7], 1.0, atol=1e-2)
+@test isapprox(failure[2], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[3], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[4], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[5], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[6], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[7], 1.0, atol=1e-2) #Todo: Failing
 @test isapprox(failure[8], 1.0, atol=1e-2)
 
 forces = [0.0; 0.0; 0.0; 1000; 500; 0.0]
@@ -517,14 +517,14 @@ sigmaR[2, :] .*= R
 sigmaR[3, :] .*= R
 failure = GXBeamCS.tsai_wu_plane(sigmaR, laminate)
 
-@test isapprox(failure[1], 1.0, atol=1e-2)
-@test isapprox(failure[2], 1.0, atol=1e-2)
+@test isapprox(failure[1], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[2], 1.0, atol=1e-2) #Todo: Failing
 # @test isapprox(failure[3], 1.0, atol=1e-2)  # again there appears an error in the text for this station.  stresses checkout.
 @test isapprox(failure[4], 1.0, atol=1e-2)
-@test isapprox(failure[5], 1.0, atol=1e-2)
-@test isapprox(failure[6], 1.0, atol=1e-2)
-@test isapprox(failure[7], 1.0, atol=1e-2)
-@test isapprox(failure[8], 1.0, atol=1e-2)
+@test isapprox(failure[5], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[6], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[7], 1.0, atol=1e-2) #Todo: Failing
+@test isapprox(failure[8], 1.0, atol=1e-2) #Todo: Failing
 end
 
 # ------- Kollar example 6.2 ------
@@ -784,6 +784,7 @@ end
 # Loss of Accuracy Using Smeared Properties in Composite Beam Modeling
 # Ning Liu, Purdue University
 
+
 @testset "CLT stress. rectangular c.s" begin
 
 # ----- rectangular cross-section ------
@@ -804,8 +805,12 @@ closed_section = false
 clt = CLT([b], closed_section)
 
 shear_center = true
-S, _, tc = compliance_matrix(clt, shear_center)
-K = clt_stiffness_matrix(S)
+S, _, tc = compliance_matrix(clt, shear_center) 
+
+# display(S)
+# K = clt_stiffness_matrix(S) #Not defined, not needed. 
+
+
 
 # F = [0.0; 0; 0]
 # M = [-1000.0; 0; 0]
@@ -936,7 +941,51 @@ for i = 1:n
     @test isapprox(s12mine[i], data3[i, 2], atol=0.4)
 end
 
-end
+
+### Test the mass matrix
+mass, cm = GXBeamCS.mass_matrix(clt)
+# mass2, cm2 = GXBeamCS.mass_matrix(clt, [0.0, 1.0], 1.0, 0.5) #Todo: This isn't giving anything close to the expected values.
+# Changing paxis to zero drives the xm2 to zero. 
+#Todo: This is giving a negative Ixx... 
+
+
+b = 4.
+h = sum(t)
+A = b*h
+mass_gold = A*rho
+cm_gold = [0.0, 1.0] 
+Ixx_gold = rho*b*(h^3)/12
+Iyy_gold = rho*(b^3)*h/12
+Ixy_gold = 0.0 
+
+@test isapprox(cm[1], cm_gold[1], atol=1e-6) #x
+@test isapprox(cm[2], cm_gold[2], atol=1e-6) #y
+@test isapprox(mass[1,1], mass_gold, atol=1e-6)
+@test isapprox(mass[5,5], Ixx_gold, atol=1e-6)
+@test isapprox(mass[6,6], Iyy_gold, atol=1e-6)
+@test isapprox(mass[5,6], Ixy_gold, atol=1e-6)
+
+
+
+## moment of inertia about origin
+mass2, cm2 = GXBeamCS.shift_mass_matrix(mass, cm, [0.0, 0.0])
+Ixx_gold = rho*b*(h^3)/12 + rho*A*(h/2)^2
+Iyy_gold = rho*(b^3)*h/12
+Ixy_gold = 0.0 
+
+
+@test isapprox(cm2[1], 0.0, atol=1e-6) #x
+@test isapprox(cm2[2], 0.0, atol=1e-6) #y
+@test isapprox(mass2[1,1], mass_gold, atol=1e-6)
+@test isapprox(mass2[5,5], Ixx_gold, atol=1e-6)
+@test isapprox(mass2[6,6], Iyy_gold, atol=1e-6)
+@test isapprox(mass2[5,6], Ixy_gold, atol=1e-6)
+
+
+end #End testset
+
+#Todo: Check that the xm_i match the center of mass. The centroid, Cm, and shear center should coincide.
+
 
 
 

@@ -136,7 +136,11 @@ function laminatestrains(alpha, beta, delta, laminate, forces)
     zvec = zspacingdouble(laminate)
     nz = length(zvec)
 
-    epsilonp = zeros(3, nz)
+    # @show typeof(alpha), typeof(beta), typeof(delta)
+
+    TF = promote_type(typeof(forces[1]), typeof(zvec[1]), typeof(alpha[1]), typeof(beta[1]), typeof(delta[1]))
+
+    epsilonp = zeros(TF, 3, nz)
     for i = 1:3
         epsilonp[i, :] = epsilonbar[i] .+ kappa[i]*zvec
     end
@@ -149,10 +153,12 @@ stress for a thin laminate given stresses.
 """
 function laminatestresses(laminate, epsilonp)
 
+    TF = promote_type(typeof(epsilonp[1]), typeof(laminate[1].t))
+
     n = length(laminate)
-    sigmap = zeros(3, 2*n)
-    sigma = zeros(3, 2*n)
-    epsilon = zeros(3, 2*n)
+    sigmap = zeros(TF, 3, 2*n)
+    sigma = zeros(TF, 3, 2*n)
+    epsilon = zeros(TF, 3, 2*n)
 
     i = 1
     for k = 1:n
@@ -186,33 +192,49 @@ end
 
 
 
-function tsai_hill(sigma, material)
-    S1t = material.S1t
-    S1c = material.S1c
-    S2t = material.S2t
-    S2c = material.S2c
-    S12 = material.S12
-
-    _, n = size(sigma)
-    failure = zeros(n)  # fails if > 1
-    for i = 1:n
-        if sigma[1, i] >= 0.0
-            S1 = S1t
-        else
-            S1 = S1c
+function tsai_hill(sigma, laminate)
+    
+    n = length(laminate)
+    # failure = zeros(2*n)  # failure if > 1
+    T = eltype(sigma)
+    failure = Vector{T}(undef, 2*n)
+    i = 1
+    for k = 1:n
+        (; S1t, S1c, S2t, S2c, S12) = laminate[k].material
+        for j = i:i+1
+            S1 = sigma[1, j] >= 0.0 ? S1t : S1c
+            S2 = sigma[2, j] >= 0.0 ? S2t : S2c
+            
+            failure[j] = sigma[1, j]^2/S1^2 + sigma[2, j]^2/S2^2 + sigma[3, j]^2/S12^2 - sigma[1, j]*sigma[2, j]/S1^2
         end
-        if sigma[2, i] >= 0.0
-            S2 = S2t
-        else
-            S2 = S2c
-        end
-        failure[i] = sigma[1, i]^2/S1^2 + sigma[2, i]^2/S2^2 + sigma[3, i]^2/S12^2 - sigma[1, i]*sigma[2, i]/S1^2
+        i += 2
     end
 
     return failure
 end
 
 function tsai_wu_plane(sigma, laminate)
+    
+    n = length(laminate)
+    # failure = zeros(2*n)  # failure if > 1
+    T = eltype(sigma)
+    failure = Vector{T}(undef, 2*n)
+    i = 1
+    for k = 1:n
+        (; S1t, S1c, S2t, S2c, S12) = laminate[k].material
+        for j = i:i+1
+            # failure[j] = sigma[1, j]^2/(S1t*S1c) + sigma[2, j]^2/(S2t*S2c) - sigma[1, j]*sigma[2, j]/sqrt(S1t*S1c*S2t*S2c) +
+            #     sigma[1, j]*(1/S1t - 1/S1c) + sigma[2, j]*(1/S2t - 1/S2c) + sigma[3, j]^2/S12^2 #Dr. Ning's math. 
+            failure[j] = sigma[1, j]^2/(S1t*S1c) + sigma[2, j]^2/(S2t*S2c) - 2*sigma[1, j]*sigma[2, j]/sqrt(S1t*S1c*S2t*S2c) +
+                sigma[1, j]*(1/S1t - 1/S1c) + sigma[2, j]*(1/S2t - 1/S2c) + sigma[3, j]^2/S12^2 #My math (Sympy)
+        end
+        i += 2
+    end
+
+    return failure
+end
+
+function full_tsai_wu(sigma, laminate)
     # S1t = strength.S1t
     # S1c = strength.S1c
     # S2t = strength.S2t
@@ -221,13 +243,29 @@ function tsai_wu_plane(sigma, laminate)
 
     # _, n = size(sigma)
     n = length(laminate)
-    failure = zeros(2*n)  # failure if > 1
+    # failure = zeros(2*n)  # failure if > 1
+    T = eltype(sigma)
+    failure = Vector{T}(undef, 2*n)
     i = 1
     for k = 1:n
         (; S1t, S1c, S2t, S2c, S12) = laminate[k].material
+        S3t = S2t
+        S3c = S2c
+        S13 = S12
+        S23 = S12
         for j = i:i+1
-            failure[j] = sigma[1, j]^2/(S1t*S1c) + sigma[2, j]^2/(S2t*S2c) - sigma[1, j]*sigma[2, j]/sqrt(S1t*S1c*S2t*S2c) +
-                sigma[1, j]*(1/S1t - 1/S1c) + sigma[2, j]*(1/S2t - 1/S2c) + sigma[3, j]^2/S12^2
+            failure[j] = sigma[1, j]^2/(S1t*S1c) +
+                    sigma[2, j]^2/(S2t*S2c) +
+                    sigma[3, j]^2/(S3t*S3c) +
+                    sigma[4, j]^2/S12^2 +
+                    sigma[5, j]^2/S13^2 +
+                    sigma[6, j]^2/S23^2 +
+                    sigma[1, j]*(1/S1t - 1/S1c) +
+                    sigma[2, j]*(1/S2t - 1/S2c) +
+                    sigma[3, j]*(1/S3t - 1/S3c) -
+                    sigma[1, j]*sigma[2, j]/sqrt(S1t*S1c*S2t*S2c) -
+                    sigma[1, j]*sigma[3, j]/sqrt(S1t*S1c*S3t*S3c) -
+                    sigma[2, j]*sigma[3, j]/sqrt(S2t*S2c*S3t*S3c)
         end
         i += 2
     end
@@ -235,6 +273,51 @@ function tsai_wu_plane(sigma, laminate)
     return failure
 end
 
+function max_stress(sigma, laminate)
+    
+    n = length(laminate)
+    T = eltype(sigma)
+    failure = Array{T, 2}(undef, 3, 2*n)  # failure if > 1
+    i = 1
+    for k = 1:n
+        (; S1t, S1c, S2t, S2c, S12) = laminate[k].material
+        for j = i:i+1
+            S1 = sigma[1, j] >= 0.0 ? S1t : -S1c
+            S2 = sigma[2, j] >= 0.0 ? S2t : -S2c
+            
+            failure[1, j] = sigma[1, j]/S1
+            failure[2, j] = sigma[2, j]/S2
+            failure[3, j] = sqrt((sigma[3, j]/S12)^2)
+        end
+        i += 2
+    end
+
+    return failure
+end
+
+function buckling_strain(epsilon, laminate, b, E_axial)
+    
+    n = length(laminate)
+    T = eltype(epsilon)
+    failure = Vector{T}(undef, 2*n)  # failure if > 1
+    i = 1
+    for k = 1:n # iterate over the layers
+        z, _ = zspacing(laminate)
+        _, _, D = laminatestiffnessmatrix(laminate, z)
+        #Todo: I'm not sure that this should be the laminate stiffness matrix or something else. 
+        Ncrit = 3.6*(pi/b)^2*D[1, 1]
+        t = laminate[k].t 
+        for j = i:i+1 # iterate over the top and bottom of the layer
+            
+            epsilon_crit = -Ncrit/(E_axial*t)
+            
+            failure[j] = epsilon[1, j]/epsilon_crit
+        end
+        i += 2
+    end
+
+    return failure
+end
 
 # ------------  CLT for Beams of Laminates -----------------
 
@@ -244,6 +327,9 @@ struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or Se
     z::VF  # Vector{Float}
 end
 
+function get_section_floattype(section)
+    return promote_type(typeof(section.y[1]), typeof(section.z[1]))
+end
 
 """
     get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments)
@@ -251,6 +337,17 @@ end
 Creates a vector of BeamSections from the information for the airfoil mesh. 
 
 **Arguments**
+- x::Vector{Float64}: normalized x-coordinates of the airfoil
+- y::Vector{Float64}: normalized y-coordinates of the airfoil
+- chord::Float64: chord length of the airfoil (meters)
+- twist::Float64: twist angle of the airfoil (radians)
+- paxis::Float64: position of the elastic axis as a fraction of the chord
+- xbreak::Vector{Float64}: normalized x-coordinates of the different regions of the airfoil
+- weblocs::Vector{Float64}: normalized x-coordinates of the webs
+- segments::Vector{Lamina}: laminas for each region
+- web_segments::Vector{Lamina}: laminas for each web
+
+**Returns**
 
 """
 function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima, le_idx=argmin(x))
@@ -278,33 +375,48 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     nb = length(xbreak)
     ns = 2*(nb - 1) + nw #Number of regions
 
-    sections = Vector{BeamSection}(undef, ns) #Todo: Typing
+    layertype = typeof(segments[1])
+    floattype = promote_type(typeof(x[1]), typeof(chord), typeof(twist), typeof(paxis))
+
+    sections = Vector{BeamSection{layertype, Vector{floattype}}}(undef, ns) #Todo: Typing
 
     s, c = sincos(twist) #I think applied twist correctly. 
     xc = paxis * chord
     idx_outer_top = 1
     idx_outer_bot = 1
+    # @show xc, s, c
     
     for i = 1:(nb-1) #Iterate over the regions
         ### Top
         idx_inner = findfirst(x -> x >= xbreak[i+1], xtop)
         idx_inner = xtop[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
 
-        y_i = @. (xtop[idx_outer_top:idx_inner]*chord - xc)*c + ytop[idx_outer_top:idx_inner]*s + xc
-        z_i = @. -(xtop[idx_outer_top:idx_inner] - xc)*s + ytop[idx_outer_top:idx_inner].*chord*c
-        
-        sections[i] = BeamSection(segments[i], y_i, z_i)
+        #Scale the coordinates
+        xi = xtop[idx_outer_top:idx_inner]*chord 
+        yi = ytop[idx_outer_top:idx_inner]*chord
 
+        #Rotate about the pitch axis.
+        x_i = @. (xi - xc)*c + yi*s + xc
+        y_i = @. -(xi - xc)*s + yi*c
+        
+        sections[i] = BeamSection(segments[i], reverse(x_i), reverse(y_i))
+
+        #Update the outer index
         idx_outer_top = idx_inner
+
+
 
         ### Bottom
         idx_inner = findfirst(x -> x >= xbreak[i+1], xbot)
         idx_inner = xbot[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
 
-        y_i = @. (xbot[idx_outer_bot:idx_inner]*chord - xc)*c + ybot[idx_outer_bot:idx_inner]*s + xc
-        z_i = @. -(xbot[idx_outer_bot:idx_inner] - xc)*s + ybot[idx_outer_bot:idx_inner].*chord*c
+        xi = xbot[idx_outer_bot:idx_inner]*chord
+        yi = ybot[idx_outer_bot:idx_inner]*chord
+
+        x_i = @. (xi - xc)*c + yi*s + xc
+        y_i = @. -(xi - xc)*s + yi*c
         
-        sections[i+nb-1] = BeamSection(segments[i], y_i, z_i)
+        sections[i+nb-1] = BeamSection(segments[i], x_i, y_i)
 
         idx_outer_bot = idx_inner
     end
@@ -312,14 +424,21 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
 
     ### Add in the webs
     idx = 2*(nb - 1)
+    # @show xc, s, c
     for i in eachindex(weblocs)
-        y_i = [weblocs[i], weblocs[i]].*chord
-        ztop = topfit(weblocs[i])
-        zbot = botfit(weblocs[i])
-        z_i = [zbot, ztop].*chord
-        y_i = @. (y_i - xc)*c + z_i*s + xc
-        z_i = @. -(y_i - xc)*s + z_i*c
-        sections[idx + i] = BeamSection(web_segments[i], y_i, z_i)
+        #Get the upper and lower coordinates of the web.
+        ytop = topfit(weblocs[i])
+        ybot = botfit(weblocs[i])
+        xi = [weblocs[i], weblocs[i]].*chord
+        yi = [ybot, ytop].*chord
+
+        #Rotate about the pitch axis. 
+        x_i = @. (xi - xc)*c + yi*s + xc 
+        y_i = @. -(xi - xc)*s + yi*c
+
+        # @show weblocs[i], ybot, ytop, x_i, y_i
+        sections[idx + i] = BeamSection(web_segments[i], x_i, y_i)
+        # println("")
     end
 
     return sections
@@ -381,11 +500,7 @@ end
 # end
 
 
-struct CLT{TC} <: CompositeSectionAnalysis
-    sections::Vector{BeamSection}  # a vector of beam sections
-    closed_section::Bool
-    cache::TC
-end
+
 
 struct CLTCache{TM1, TM2, TM3, TM4}
     F::TM1
@@ -394,12 +509,25 @@ struct CLTCache{TM1, TM2, TM3, TM4}
     S::TM4
 end
 
-function CLT(sections, closed_section)  # initialize empty cache
-    F = zeros(2, 2)
-    L = zeros(2, 4)
-    Wbar = Symmetric(zeros(4, 4))
-    S = Symmetric(zeros(4, 4))
+struct CLT{TL, TF, TM1, TM2, TM3, TM4} <: CompositeSectionAnalysis 
+    sections::Vector{BeamSection{TL, TF}}  # a vector of beam sections
+    closed_section::Bool
+    cache::CLTCache{TM1, TM2, TM3, TM4}
+end
+
+function CLT(sections, closed_section, TF::DataType)  # initialize empty cache
+
+    F = zeros(TF, 2, 2)
+    L = zeros(TF, 2, 4)
+    Wbar = Symmetric(zeros(TF, 4, 4))
+    S = Symmetric(zeros(TF, 4, 4))
     return CLT(sections, closed_section, CLTCache(F, L, Wbar, S))
+end
+
+function CLT(sections, closed_section)
+    TF = promote_type(typeof(sections[1].laminate[1].material.E1), typeof(sections[1].y[1]))
+
+    return CLT(sections, closed_section, TF)
 end
 
 CLT(sections) = CLT(sections, true)  # default to closed section
@@ -506,29 +634,34 @@ function compliance_matrix(clt::CLT, shear_center=true)
           0 0 0 1]
     S = Symmetric(Rb'*Wbar*Rb)  # compliance
     # K = inv(S)
-    sc = [0.0, 0.0]  # TODO
+    sc = [0.0, 0.0]  #Todo: 
     tc = [yc, zc]
 
-    Sfull = zeros(6, 6)
+    TF = eltype(S)
+    Sfull = zeros(TF, 6, 6)
     idx = [1, 5, 6, 4]
     for i = 1:4
         for j = i:4
             Sfull[idx[i], idx[j]] = S[i, j]
         end
     end
-
+ 
     clt.cache.S .= S #Todo. Does this S need the effect from the shear flow? -> It looks like shear flow doesn't replace any of the indices in S, so it should be fine.
 
-    s, S, ysc, zsc = shearflow_general_attempt(clt.sections, Wbar, F, L, yc, zc) 
-    Sfull[2, 2] = s[1, 1]
-    Sfull[3, 3] = s[2, 2]
-    # Sfull[2, 2] = s[2, 2]
-    # Sfull[3, 3] = s[1, 1]
+
+    if clt.closed_section
+        s, S, ysc, zsc = shearflow_general_attempt(clt.sections, Wbar, F, L, yc, zc) 
+        # s, S, ysc, zsc = shearflow(clt.sections, S, yc, zc; closedsection=clt.closed_section) #Super mega slow. Todo: I'm not sure on the S input. 
+        Sfull[2, 2] = s[1, 1]
+        Sfull[3, 3] = s[2, 2]
+        # Sfull[2, 2] = s[2, 2]
+        # Sfull[3, 3] = s[1, 1]
+    end
 
 
     Sfull = Symmetric(Sfull)
 
-    # move to sc (TODO: tc for now)
+    # move to sc
     if shear_center
         ysc = sc[1]; zsc = sc[2]
         P = [0 zsc -ysc; -zsc 0 0; ysc 0 0]
@@ -547,30 +680,198 @@ function compliance_matrix(clt::CLT, shear_center=true)
     return Sfull, sc, tc
 end
 
-function mass_matrix(clt::CLT, shear_center=true) #Todo: Finish me!
-    mu = 0.0 #Todo: Typing
-    xm2 = 0.0
-    xm3 = 0.0
-    i22 = 0.0
-    i33 = 0.0
-    i23 = 0.0
-    
+
+
+
+
+"""
+    mass_matrix(clt::CLT)
+
+Finding the mass matrix of the composite section.
+
+**Arguments**
+- clt::CLT: the composite section
+
+**Returns**
+- M: the mass matrix
+- [xm, ym]: the center of mass
+"""
+function mass_matrix(clt::CLT)
+
+    mass = 0.0 #TODO: Typing? -> Dr. Ning uses this. 
+    #Center of mass
+    xm = 0.0 
+    ym = 0.0
+
     for i in eachindex(clt.sections)
         sec = clt.sections[i]
-        x = abs(diff(sec.y)[1])
-        y = abs(diff(sec.z)[1])
-        L = sqrt(x^2 + y^2)
-        
-        for j in eachindex(sec.laminate)
 
-            # A = 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula) -> Stolen from below. 
-            A = L*sec.laminate[j].t
+        ns = length(sec.y)
 
-            mu += A*sec.laminate[j].material.rho
+        for j in 1:ns-1 #Iterate over the number of elements in the section
+            x = sec.y[j+1] - sec.y[j] #The x distance between the element end points
+            y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
+            L = sqrt(x^2 + y^2)
+
+            #Midpoint of the element
+            xmid = (sec.y[j+1] + sec.y[j])/2
+            ymid = (sec.z[j+1] + sec.z[j])/2
+
+            #Normal vector to the element
+            nx = -y/L
+            ny = x/L
+
+            # @show nx, ny
+
+            T = 0.0 #The total thickness travelled so far. 
+
+            for k in eachindex(sec.laminate) #Iterate over the laminates in the section
+                t = sec.laminate[k].t #The thickness of the laminate
+                rho = sec.laminate[k].material.rho #The density of the laminate
+                A = L*t #Area of the section
+
+                #Centroid of the element lamina
+                xc = xmid + nx*(T + t/2)
+                yc = ymid + ny*(T + t/2)
+
+                # @show xc, yc
+
+                dmass = A*rho
+                mass += dmass
+                xm  += dmass*xc
+                ym  += dmass*yc
+
+                T += t #Increment the thickness
+            end #End looping over laminates
+        end #end looping over segment elements
+    end #End looping over sections
+
+    xm /= mass
+    ym /= mass
+
+    Ixx = 0.0
+    Iyy = 0.0
+    Ixy = 0.0
+
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
+
+        ns = length(sec.y)
+
+        for j in 1:ns-1 #Iterate over the number of elements in the section
+            x = sec.y[j+1] - sec.y[j] #The x distance between the element end points
+            y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
+            L = sqrt(x^2 + y^2)
+
+            #Midpoint of the element
+            xmid = (sec.y[j+1] + sec.y[j])/2
+            ymid = (sec.z[j+1] + sec.z[j])/2
+
+            #Normal vector to the element
+            nx = -y/L
+            ny = x/L
+
+            #Angles
+            ctheta = x/L
+            stheta = y/L
+
+            T = 0.0 #The total thickness travelled so far.
+
+            for k in eachindex(sec.laminate) #Iterate over the laminates in the section
+                t = sec.laminate[k].t #The thickness of the laminate
+                rho = sec.laminate[k].material.rho #The density of the laminate
+                A = L*t #Area of the section
+
+                #Centroid of the element lamina
+                xc = xmid + nx*(T + t/2)
+                yc = ymid + ny*(T + t/2)
+
+                # Ixx += rho*A*(yc - ym)^2
+                # Iyy += rho*A*(xc - xm)^2
+                # Ixy += rho*A*(xc - xm)*(yc - ym)
+
+                ## Mass moment of inertia about the centroid
+                Ixx_c = rho*L*(t^3)/12
+                Iyy_c = rho*t*(L^3)/12
+                # Ixy_c = 0.0
+
+                ## Rotate the inertia
+                Ixx_cp = Ixx_c*(ctheta^2) + Iyy_c*(stheta^2) #-2*Ixy_c*stheta*ctheta
+                Iyy_cp = Ixx_c*(stheta^2) + Iyy_c*(ctheta^2) #+2*Ixy_c*stheta*ctheta
+                Ixy_cp = (Ixx_c - Iyy_c)*stheta*ctheta #+ Ixy_c*(ctheta^2 - stheta^2)
+
+                ## Shift the inertia (parallel axis theorem)
+                # Ixx += Ixx_cp + rho*A*((yc - ym)^2)
+                # Iyy += Iyy_cp + rho*A*((xc - xm)^2)
+                # Ixy += Ixy_cp + rho*A*((xc - xm)*(yc - ym))
+                Ixx_ = Ixx_cp + rho*A*((yc - ym)^2)
+                Iyy_ = Iyy_cp + rho*A*((xc - xm)^2)
+                Ixy_ = Ixy_cp + rho*A*((xc - xm)*(yc - ym))
+
+                Ixx += Ixx_
+                Iyy += Iyy_
+                Ixy += Ixy_
+
+                # @show t, L, A, rho, xc, yc, xm, ym, Ixx_, Iyy_, Ixy_
+                T += t #Increment the thickness
+            end #End looping over laminates
+        end #end looping over segment elements
+    end #End looping over sections
+
+    M = Symmetric([
+        mass 0.0 0 0 mass*ym -mass*xm
+        0 mass 0 -mass*ym 0 0
+        0 0 mass mass*xm 0 0
+        0 -mass*ym mass*xm Ixx+Iyy 0 0
+        mass*ym 0 0 0 Ixx -Ixy
+        -mass*xm 0 0 0 -Ixy Iyy
+    ])
+
+    return M, [xm, ym]
+end
+
+"""
+    shift_mass_matrix(M, cm, sc)
+
+Shift the mass matrix from the center of mass to the shear center (or any other point). 
+
+**Arguments**
+- M: the mass matrix
+- cm: the center of mass
+- sc: the shear center
+
+**Returns**
+- M: the shifted mass matrix
+- rvec: the vector from the center of mass to the shear center
+"""
+function shift_mass_matrix(M, cm, sc; check=true)
+    mass = M[1, 1]
+    xm_m = -M[1, 6]/mass
+    ym_m = M[1, 5]/mass
+
+    if check
+        if !isapprox(cm[1], xm_m) || !isapprox(cm[2], ym_m)
+            @warn("The given center of mass does not match the mass matrix center of mass.")
         end
     end
 
+    rvec = sc .- cm
 
+    xm = sc[1]
+    ym = sc[2]
+
+    Ixx = M[5, 5] + mass*(rvec[2]^2)
+    Iyy = M[6, 6] + mass*(rvec[1]^2)
+    Ixy = -M[5, 6] + mass*rvec[1]*rvec[2]
+
+    return Symmetric([
+        mass 0.0 0 0 mass*ym -mass*xm
+        0 mass 0 -mass*ym 0 0
+        0 0 mass mass*xm 0 0
+        0 -mass*ym mass*xm Ixx+Iyy 0 0
+        mass*ym 0 0 0 Ixx -Ixy
+        -mass*xm 0 0 0 -Ixy Iyy
+    ]), rvec
 end
 
 
@@ -944,10 +1245,15 @@ function strains_and_stresses(F, M, clt::CLT)
     for i = 1:m
         ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
     end
-    strain_p = zeros(6, ntotal) #Todo: Will this pass duals? 
-    stress_p = zeros(6, ntotal)
-    strain_b = zeros(6, ntotal)
-    stress_b = zeros(6, ntotal)
+
+    ### Preallocate
+    #Get the typing for the arrays
+    TF = promote_type(typeof(F[1]), typeof(M[1]), typeof(clt.sections[1].y[1]))
+
+    strain_p = zeros(TF, 6, ntotal) 
+    stress_p = zeros(TF, 6, ntotal)
+    strain_b = zeros(TF, 6, ntotal)
+    stress_b = zeros(TF, 6, ntotal)
 
     idx = 1
     for sec in clt.sections #Iterate across the sectinos
@@ -1017,8 +1323,8 @@ function strains_and_stresses(F, M, clt::CLT)
             #     stress_b[:, ir], strain_b[:, ir] = rotate_stress_and_strains(stress_p[:, ir], strain_p[:, ir], thetak, ca, sa)
             # end
 
-            sigma_temp = zeros(6)
-            epsilon_temp = zeros(6)
+            sigma_temp = zeros(TF, 6)
+            epsilon_temp = zeros(TF, 6)
             for ir = idx:idx+nz-1
                 sigma_temp[[1, 2, 4]] .= sigmaprime[:, ir-idx+1]
                 epsilon_temp[[1, 2, 4]] .= epsilonprime[:, ir-idx+1]
@@ -1034,6 +1340,19 @@ function strains_and_stresses(F, M, clt::CLT)
     return strain_b, stress_b, strain_p, stress_p
 end
 
+
+"""
+    tsai_wu(stress, clt::CLT)
+
+Compute Tsai-Wu failure criterion for a composite section.
+
+**Arguments**
+- stress::Matrix{TF}: 6 stresses in the ply coordinate system. Stresses should be calculated at the top and bottom of each ply (as in `strains_and_stresses`).
+- clt::CLT: the composite section
+
+**Returns**
+- failure::Vector{TF}: Tsai-Wu failure criterion for the top and bottom of each ply (where the stresses are calculated)
+"""
 function tsai_wu(stress, clt::CLT)
 
     m = length(clt.sections)
@@ -1044,7 +1363,8 @@ function tsai_wu(stress, clt::CLT)
         ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
     end
 
-    failure = zeros(ntotal)
+    T = eltype(stress)
+    failure = Vector{T}(undef, ntotal)
 
     stress_idx = [1, 2, 4] #Stresses map (1, 2, 4) -> (1, 2, 3)
     idx = 1
@@ -1053,14 +1373,176 @@ function tsai_wu(stress, clt::CLT)
         for j = 1:length(sec.y)-1
             nl = length(sec.laminate)
             idxs = idx:idx+2*nl-1
-            
-            failure[idxs] = tsai_wu_plane(stress[stress_idx, idxs], sec.laminate)
+
+            # failure[idxs] = tsai_wu_plane(stress[stress_idx, idxs], sec.laminate)
+            failure[idxs] = full_tsai_wu(stress[:, idxs], sec.laminate)
 
             idx += 2*nl
         end
     end
 
     return failure
+end
+
+"""
+    tsai_hill(stress, clt::CLT)
+
+Compute Tsai-Hill failure criterion for a composite section.
+
+**Arguments**
+- stress::Matrix{TF}: 6 stresses in the ply coordinate system. Stresses should be calculated at the top and bottom of each ply (as in `strains_and_stresses`).
+- clt::CLT: the composite section
+
+**Returns**
+- failure::Vector{TF}: Tsai-Wu failure criterion for the top and bottom of each ply (where the stresses are calculated)
+"""
+function tsai_hill(stress, clt::CLT)
+
+    m = length(clt.sections)
+
+    # count how many locations I have to compute failure at
+    ntotal = 0
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+
+    T = eltype(stress)
+    failure = Vector{T}(undef, ntotal)
+
+    stress_idx = [1, 2, 4] #Stresses map (1, 2, 4) -> (1, 2, 3)
+    idx = 1
+    for i = 1:m
+        sec = clt.sections[i]
+        for j = 1:length(sec.y)-1
+            nl = length(sec.laminate)
+            idxs = idx:idx+2*nl-1
+
+            failure[idxs] = tsai_hill(stress[stress_idx, idxs], sec.laminate)
+
+            idx += 2*nl
+        end
+    end
+
+    return failure
+end
+
+"""
+    max_stress(stress, clt::CLT)
+
+Compute the maximum stress failure criterion for a composite section.
+
+**Arguments**
+- stress::Matrix{TF}: 6 stresses in the ply coordinate system. Stresses should be calculated at the top and bottom of each ply (as in `strains_and_stresses`).
+- clt::CLT: the composite section
+
+**Returns**
+- failure::Vector{TF}: Tsai-Wu failure criterion for the top and bottom of each ply (where the stresses are calculated)
+"""
+function max_stress(stress, clt::CLT)
+
+    m = length(clt.sections)
+
+    # count how many locations I have to compute failure at
+    ntotal = 0
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+
+    T = eltype(stress)
+    failure = Array{T, 2}(undef, 3, ntotal)
+
+    stress_idx = [1, 2, 4] #Stresses map (1, 2, 4) -> (1, 2, 3)
+    idx = 1
+    for i = 1:m
+        sec = clt.sections[i]
+        for j = 1:length(sec.y)-1
+            nl = length(sec.laminate)
+            idxs = idx:idx+2*nl-1
+
+            failure[:, idxs] = max_stress(stress[stress_idx, idxs], sec.laminate)
+
+            idx += 2*nl
+        end
+    end
+
+    return failure
+end
+
+"""
+    buckling(clt::CLT, strain, E_axial)
+
+Compute the buckling failure criterion for a composite section.
+
+**Arguments**
+- clt::CLT: the composite section
+- strain::Matrix{TF}: 6 strains in the ply coordinate system. Strains should be calculated at the top and bottom of each ply (as in `strains_and_stresses`)
+- E_axial::TF: axial modulus of elasticity
+
+**Returns**
+- failure::Vector{TF}: buckling failure criterion for the top and bottom of each ply (where the stresses are calculated)
+"""
+function buckling(clt::CLT, strain, E_axial)
+
+    m = length(clt.sections)
+
+    # count how many locations I have to compute failure at
+    ntotal = 0
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+
+    T = eltype(strain)
+    failure = Vector{T}(undef, ntotal)
+
+    strain_idx = [1, 2, 4] #Strain map (1, 2, 4) -> (1, 2, 3)
+    idx = 1
+    for i = 1:m #Iterate over the sections
+        sec = clt.sections[i]
+        for j = 1:length(sec.y)-1 #Iterate over the elements in the section
+            nl = length(sec.laminate)
+            idxs = idx:idx+2*nl-1
+
+            x = sec.y[j+1] - sec.y[j] #The x distance between the element end points
+            y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
+            L = sqrt(x^2 + y^2) #The length of the element
+
+            failure[idxs] = buckling_strain(strain[strain_idx, idxs], sec.laminate, L, E_axial)
+
+            idx += 2*nl
+        end
+    end
+
+    return failure
+end
+
+"""
+    interpolate_load(load, clt::CLT, x, y)
+
+Find the strain, stress, or failure at a specific point in the cross section.
+
+**Arguments**
+- load::Vector{TF}: the load (strain, stress, or failure) at the top and bottom of each ply (as in `strains_and_stresses` or `tsai_wu`)
+- clt::CLT: the composite section
+- x::TF: x-coordinate of the point
+- y::TF: y-coordinate of the point
+- fit::Function: interpolation function (default: linear)
+
+**Returns**
+- load_new: the interpolated value at the point
+"""
+function interpolate_load(load, clt::CLT, x, y; fit=linear)
+
+
+    #= 
+        - I need to find the section that the point is in
+        - How do I guarantee that the point is in the cross section? (Not floating in empty space or outside the shape)
+            - Floating outside the empy shape should be easy... right? 
+            - Well I guess that the defining points are hidden away in the sections of CLT. I could probably iterate through, but I don't know if that would tell me anything about the actual shape. How do I know what order they should be in. 
+            - I could probably just make a 2D unstructured grid then interpolate based on that? 
+
+            - Probably just easier to visually inspect at this point. 
+    =#
+    
 end
 
 
@@ -1218,15 +1700,17 @@ function shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
 
     m = length(sections)
 
+    TF = get_section_floattype(sections[1])
+
     qoy = 0.0
     qoz = 0.0
     qcy = 0.0
     qcz = 0.0
     eta = 0.0
-    AMy = zeros(2, 2)
-    bvy = zeros(2)
-    AMz = zeros(2, 2)
-    bvz = zeros(2)
+    AMy = zeros(TF, 2, 2)
+    bvy = zeros(TF, 2)
+    AMz = zeros(TF, 2, 2)
+    bvz = zeros(TF, 2)
     for i = 1:m
         sec = sections[i]
         yp = sec.y
@@ -1261,6 +1745,18 @@ function shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
             M = (muk\(Reta*Rk - nuk*(F\L)))*Wbar
 
             # --------
+            # @show typeof(M) #Matrix{ForwardDiff.Dual{ForwardDiff.Tag{var"#objwrap#92"{Int64}, Float64}, Float64, 12}}
+            # @show typeof(Vy) #Defined below
+            # @show typeof(Vz) #Defined below
+            # @show b # Dual
+            # @show alpha #Matrix{Floats}
+            # @show beta #Matrix{Floats}
+            # @show delta #Matrix{Floats}
+            # @show qoy #TF
+            # @show AMy #Matrix{Floats}
+            # @show bvy #Vector{Floats}
+
+
             Vy = 1.0; Vz = 0.0
             qoy = shearflowsub!(M, Vy, Vz, b, alpha, beta, delta, qoy, AMy, bvy)
 
@@ -1363,8 +1859,7 @@ end
 
 # -------------------------------------------------------------
 
-@recipe function plot_laminate(laminate::Array{TL, 1}, x, y) where {TL<:Layer} #Todo: I think I'm going to move the majority of this into a function so it doesn't get repeated so much. 
-
+function get_laminate_points(laminate::Array{TL, 1}, x, y) where {TL<:Layer}
     nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup. 
     nhat = nhat./norm(nhat)
 
@@ -1386,7 +1881,13 @@ end
         idx += 1
     end
 
-    
+    return xp, yp
+end
+
+@recipe function plot_laminate(laminate::Array{TL, 1}, x, y) where {TL<:Layer} #Todo: I think I'm going to move the majority of this into a function so it doesn't get repeated so much. 
+
+    xp, yp = get_laminate_points(laminate, x, y)
+
     # Loop through each layer and plot. 
     for i in 1:nl
         @series begin
@@ -1405,57 +1906,52 @@ end
 end # End recipe
 
 
-@recipe function plot_section(sections::TB) where {TB<:BeamSection}
+@recipe function plot_clt(clt::CLT)
 
-    for i in 1:length(sections) #Loop through all the regions
-        laminate = sections[i].laminate
-        x = sections[i].y
-        y = sections[i].z
-        # x = reverse(sections[i].y) #Didn't flip the side that the laminate is on in the image. 
-        # y = reverse(sections[i].z)
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
 
-        # nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup.
-        # nhat = [y[2] - y[1], x[2] - x[1]] #Didn't appear to flip the laminate. 
-        # nhat = [y[1] - y[2], x[2] - x[1]] 
-        nhat = [y[2] - y[1], x[1] - x[2]] #Todo: This makes me nervous that what I have in the beam sections is off. 
+        ns = length(sec.y)
 
-        nhat = nhat./norm(nhat)
+        for j in 1:ns-1 #Iterate over the number of elements in the section
+            x = sec.y[j+1] - sec.y[j] #The x distance between the element end points
+            y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
+            L = sqrt(x^2 + y^2)
 
-        nl = length(laminate)
-        np = 2nl + 2
-        xp = zeros(np)
-        yp = zeros(np)
 
-        xp[1:2] = x[1:2]
-        yp[1:2] = y[1:2]
+            #Normal vector to the element
+            nx = -y/L
+            ny = x/L
 
-        idx = 1
-        for k in 3:2:np
-            xp[k] = xp[k-2] + nhat[1]*laminate[idx].t
-            xp[k+1] = xp[k-1] + nhat[1]*laminate[idx].t
+            # @show nx, ny
 
-            yp[k] = yp[k-2] + nhat[2]*laminate[idx].t
-            yp[k+1] = yp[k-1] + nhat[2]*laminate[idx].t
-            idx += 1
-        end
+            T = 0.0 #The total thickness travelled so far. 
 
-        
-        # Loop through each layer and plot. 
-        for k in 1:nl
-            @series begin
-                j = 2*(k-1)+1
-                idxs = [j, j+1, j+3, j+2, j]
-            
-                xr = xp[idxs]
-                yr = yp[idxs]
+            for k in eachindex(sec.laminate) #Iterate over the laminates in the section
+                t = sec.laminate[k].t #The thickness of the laminate
+                
+                # p1 = [sec.y[j] + nx*T, sec.z[j] + ny*T] #The first point of the laminate
+                # p2 = [sec.y[j+1] + nx*T, sec.z[j+1] + ny*T] #The second point of the laminate
+                # p3 = [sec.y[j] + nx*(T + t), sec.z[j] + ny*(T + t)] #The third point of the laminate
+                # p4 = [sec.y[j+1] + nx*(T + t), sec.z[j+1] + ny*(T + t)] #The fourth point of the laminate
 
-                label --> false
-                seriescolor --> :black
+                xp = [sec.y[j] + nx*T, sec.y[j+1] + nx*T, sec.y[j] + nx*(T+t), sec.y[j+1] + nx*(T+t)]
+                yp = [sec.z[j] + ny*T, sec.z[j+1] + ny*T, sec.z[j] + ny*(T+t), sec.z[j+1] + ny*(T+t)]
 
-                xr, yr
-            end
-        end #end looping through laminates
-    end #End looping through sections
+                @series begin
+                    label --> false
+                    seriescolor --> :black
+
+                    xp, yp
+                end
+
+
+                T += t #Increment the thickness
+            end #End looping over laminates
+        end #end looping over segment elements
+    end #End looping over sections
+
+    
 end #End recipe
 
 @recipe function plot_sections(sections::Array{TB, 1}) where {TB<:BeamSection}

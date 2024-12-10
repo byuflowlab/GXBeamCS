@@ -121,6 +121,10 @@ function thickness(layup::Vector{<:Layer})
     return sum(l.t for l in layup)
 end
 
+function get_laminate_type(laminate::Vector{<:Layer})
+    return typeof(laminate[1].t)
+end
+
 # -----------------------------------------------------------
 
 
