@@ -295,7 +295,7 @@ function max_stress(sigma, laminate)
     return failure
 end
 
-function buckling_strain(epsilon, laminate, b, E_axial)
+function mybuckling_strain(epsilon, laminate, b, E_axial)
     
     n = length(laminate)
     T = eltype(epsilon)
@@ -316,6 +316,43 @@ function buckling_strain(epsilon, laminate, b, E_axial)
         i += 2
     end
 
+
+    return failure
+end
+
+function buckling_strain(epsilon, laminate, b)
+    
+
+    ### Based on RotorSE
+    #This is what they use for Eaxial: https://github.com/WISDEM/RotorSE/blob/d497e96a612b56aa37b57d35c64aa5049bb9136f/src/rotorse/precomp.py
+
+    # A, B, D, totalHeight = self.compositeMatrices(sector)
+
+    # S = np.vstack((np.hstack((A, B)), np.hstack((B, D))))
+
+    # # E_eff_x = N_x/h/eps_xx and eps_xx = S^{-1}(0,0)*N_x (approximately)
+    # detS = np.linalg.det(S)
+    # Eaxial = detS/np.linalg.det(S[1:, 1:])/totalHeight
+
+
+    #This is their main approach
+    #https://github.com/WISDEM/RotorSE/blob/d497e96a612b56aa37b57d35c64aa5049bb9136f/src/rotorse/rotor.py
+    z, _ = zspacing(laminate)
+    h = z[end] - z[1]
+    # @show h, sum(l.t for l in laminate) #True
+    A, B, D = laminatestiffnessmatrix(laminate, z)
+
+    S = [A B; B D]
+    E_axial = det(S)/det(S[2:end, 2:end])/h
+
+    dterm = sqrt(D[1, 1]*D[2, 2]) + D[1, 2] + 2*D[3,3]
+    Ncrit = 3.6*((pi/b)^2)*dterm
+
+    eps_crit = -Ncrit/(E_axial*h)
+
+    failure = epsilon[1,1]/eps_crit
+
+
     return failure
 end
 
@@ -331,6 +368,7 @@ function get_section_floattype(section)
     return promote_type(typeof(section.y[1]), typeof(section.z[1]))
 end
 
+
 """
     get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments)
 
@@ -341,7 +379,7 @@ Creates a vector of BeamSections from the information for the airfoil mesh.
 - y::Vector{Float64}: normalized y-coordinates of the airfoil
 - chord::Float64: chord length of the airfoil (meters)
 - twist::Float64: twist angle of the airfoil (radians)
-- paxis::Float64: position of the elastic axis as a fraction of the chord
+- paxis::Float64: position of the reference axis as a fraction of the chord. Twisting about this axis. 
 - xbreak::Vector{Float64}: normalized x-coordinates of the different regions of the airfoil
 - weblocs::Vector{Float64}: normalized x-coordinates of the webs
 - segments::Vector{Lamina}: laminas for each region
@@ -532,6 +570,91 @@ end
 
 CLT(sections) = CLT(sections, true)  # default to closed section
 
+"""
+    get_clt_element_position(clt, i)
+Grab the position of the ith layer element in the CLT.
+
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the element
+
+**Returns**
+- Tuple{Vector{Float64}, Vector{Float64}}: the y and z coordinates of the element
+"""
+function get_clt_element_position(clt::CLT, i)
+
+    idx = 1
+    for j in eachindex(clt.sections)
+        sec = clt.sections[j]
+        n_seg = length(sec.y)-1
+
+        for k in 1:n_seg
+            lam = sec.laminate
+            T = 0.0
+            for l in eachindex(lam)
+                if idx == i
+                    x = sec.y[k+1] - sec.y[k]
+                    y = sec.z[k+1] - sec.z[k]
+                    L = sqrt(x^2 + y^2) #Element length
+                    
+                    #Normal vector to the element
+                    nx = -y/L
+                    ny = x/L
+
+                    xm = (sec.y[k] + sec.y[k+1])/2
+                    ym = (sec.z[k] + sec.z[k+1])/2
+
+                    xp = xm + nx*(T + lam[l].t/2)
+                    yp = ym + ny*(T + lam[l].t/2)
+                    
+                    return xp, yp
+                end
+                idx += 1
+                T += lam[l].t
+            end #End laminate (element) loop
+        end #End segment loop
+    end #End section loop
+    
+    @warn("layer index out of range ($i > $idx)")
+    return 0
+end
+
+function get_section_indices(clt::CLT, i)
+    idx = 1
+    n = length(clt.sections)
+    for j in 1:(i-1)
+        sec = clt.sections[j]
+        n_seg = length(sec.y)-1
+        idx += n_seg*length(sec.laminate)
+
+    end #End section loop
+
+    seci = clt.sections[i]
+    n_segi = length(seci.y)-1
+    m_segi = length(seci.laminate)
+    idxs = idx+1:idx+n_segi*m_segi
+
+    return idxs
+end
+
+function get_section_layer_indices(section::BeamSection, indices, i_layer)
+
+    n_idx = length(indices)
+    num_layers = length(section.laminate)
+    n_seg = length(section.y)-1
+
+    if n_idx != n_seg*num_layers
+        @warn("Number of indices does not match number of elements in section")
+    end
+
+    return indices[i_layer:num_layers:end]
+end
+
+function get_section_layer_indices(clt::CLT, i, i_layer)
+    idxs = get_section_indices(clt, i)
+    sec = clt.sections[i]
+    return get_section_layer_indices(sec, idxs, i_layer)
+end
 
 function fullstiffnessmatrix(P, S)
     K = zeros(6, 6)
@@ -634,8 +757,8 @@ function compliance_matrix(clt::CLT, shear_center=true)
           0 0 0 1]
     S = Symmetric(Rb'*Wbar*Rb)  # compliance
     # K = inv(S)
-    sc = [0.0, 0.0]  #Todo: 
-    tc = [yc, zc]
+    sc = [0.0, 0.0]  #Shear Center #Todo: 
+    tc = [yc, zc] #Tension Center
 
     TF = eltype(S)
     Sfull = zeros(TF, 6, 6)
@@ -654,6 +777,8 @@ function compliance_matrix(clt::CLT, shear_center=true)
         # s, S, ysc, zsc = shearflow(clt.sections, S, yc, zc; closedsection=clt.closed_section) #Super mega slow. Todo: I'm not sure on the S input. 
         Sfull[2, 2] = s[1, 1]
         Sfull[3, 3] = s[2, 2]
+
+        # sc = [ysc, zsc] #Note: I don't think ysc and zsc are actual the shear center coordinates. 
         # Sfull[2, 2] = s[2, 2]
         # Sfull[3, 3] = s[1, 1]
     end
@@ -691,12 +816,13 @@ Finding the mass matrix of the composite section.
 
 **Arguments**
 - clt::CLT: the composite section
+- reference::Vector{Float64}: the reference frame for the mass matrix: [x, y, theta]. x, y are the origin of the reference frame (often some percentage of the chord), and theta is the twist angle.
 
 **Returns**
 - M: the mass matrix
 - [xm, ym]: the center of mass
 """
-function mass_matrix(clt::CLT)
+function mass_matrix(clt::CLT; reference=nothing)
 
     mass = 0.0 #TODO: Typing? -> Dr. Ning uses this. 
     #Center of mass
@@ -817,6 +943,17 @@ function mass_matrix(clt::CLT)
             end #End looping over laminates
         end #end looping over segment elements
     end #End looping over sections
+
+    if !isnothing(reference)
+        #Shift to the reference point
+        x = [xm-reference[1], ym-reference[2]] 
+        #Rotate about the reference point into reference frame
+        R = [cos(reference[3]) -sin(reference[3]); sin(reference[3]) cos(reference[3])]
+        x = R*x
+        #Rename 
+        xm = x[1]
+        ym = x[2]
+    end
 
     M = Symmetric([
         mass 0.0 0 0 mass*ym -mass*xm
@@ -1488,7 +1625,8 @@ function buckling(clt::CLT, strain, E_axial)
     # count how many locations I have to compute failure at
     ntotal = 0
     for i = 1:m
-        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+        # ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+        ntotal += (length(clt.sections[i].y) - 1) #* 2*length(clt.sections[i].laminate)
     end
 
     T = eltype(strain)
@@ -1506,14 +1644,22 @@ function buckling(clt::CLT, strain, E_axial)
             y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
             L = sqrt(x^2 + y^2) #The length of the element
 
-            failure[idxs] = buckling_strain(strain[strain_idx, idxs], sec.laminate, L, E_axial)
+            # failure[idxs] = buckling_strain(strain[strain_idx, idxs], sec.laminate, L, E_axial)
+            failure[idx] = buckling_strain(strain[strain_idx, idxs], sec.laminate, L) #RotorSE approach
+            #https://github.com/WISDEM/RotorSE/blob/d497e96a612b56aa37b57d35c64aa5049bb9136f/src/rotorse/rotor.py
 
-            idx += 2*nl
+            # idx += 2*nl
+            idx += 1
         end
     end
 
     return failure
 end
+
+function max_strain(clt::CLT, strain, strain_ult)
+end
+
+
 
 """
     interpolate_load(load, clt::CLT, x, y)
@@ -1906,11 +2052,12 @@ end
 end # End recipe
 
 
-@recipe function plot_clt(clt::CLT)
+@recipe function plot_clt(clt::CLT; highlight_idxs=[], highlight=:red)
 
+
+    idx = 1 #Element counter
     for i in eachindex(clt.sections)
         sec = clt.sections[i]
-
         ns = length(sec.y)
 
         for j in 1:ns-1 #Iterate over the number of elements in the section
@@ -1930,22 +2077,22 @@ end # End recipe
             for k in eachindex(sec.laminate) #Iterate over the laminates in the section
                 t = sec.laminate[k].t #The thickness of the laminate
                 
-                # p1 = [sec.y[j] + nx*T, sec.z[j] + ny*T] #The first point of the laminate
-                # p2 = [sec.y[j+1] + nx*T, sec.z[j+1] + ny*T] #The second point of the laminate
-                # p3 = [sec.y[j] + nx*(T + t), sec.z[j] + ny*(T + t)] #The third point of the laminate
-                # p4 = [sec.y[j+1] + nx*(T + t), sec.z[j+1] + ny*(T + t)] #The fourth point of the laminate
-
-                xp = [sec.y[j] + nx*T, sec.y[j+1] + nx*T, sec.y[j] + nx*(T+t), sec.y[j+1] + nx*(T+t)]
-                yp = [sec.z[j] + ny*T, sec.z[j+1] + ny*T, sec.z[j] + ny*(T+t), sec.z[j+1] + ny*(T+t)]
+                xp = [sec.y[j] + nx*T, sec.y[j+1] + nx*T, sec.y[j+1] + nx*(T+t), sec.y[j] + nx*(T+t), sec.y[j] + nx*T]
+                yp = [sec.z[j] + ny*T, sec.z[j+1] + ny*T, sec.z[j+1] + ny*(T+t), sec.z[j] + ny*(T+t), sec.z[j] + ny*T]
 
                 @series begin
                     label --> false
-                    seriescolor --> :black
+                    if in(idx, highlight_idxs)
+                        seriescolor --> highlight
+            
+                    else
+                        seriescolor --> :black
+                    end
 
                     xp, yp
                 end
-
-
+                
+                idx += 1 #Increment the element counter
                 T += t #Increment the thickness
             end #End looping over laminates
         end #end looping over segment elements
@@ -1954,8 +2101,7 @@ end # End recipe
     
 end #End recipe
 
-@recipe function plot_sections(sections::Array{TB, 1}) where {TB<:BeamSection}
-end #End recipe
+
 
 @recipe function plot_section_solution(sections::Array{TB, 1}, solution::Array{TF, 1}) where {TB<:BeamSection, TF}
 
