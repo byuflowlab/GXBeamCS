@@ -46,9 +46,10 @@ compute the z locations and overall height for each lamina in the laminate.
 function zspacing(laminate)
 
     n = length(laminate)
+    TF = eltype(laminate[1])
 
     # compute z vector
-    z = zeros(n+1)
+    z = zeros(TF, n+1)
     for i = 1:n
         z[i+1] = z[i] + laminate[i].t
     end
@@ -67,7 +68,8 @@ function zspacingdouble(laminate)
 
     # setup new z vector at top and bottom of each ply
     nz = 2*(length(z)-1)
-    zvec = zeros(nz)
+    TF = eltype(laminate[1])
+    zvec = zeros(TF, nz)
     zvec[1] = z[1]
     zvec[end] = z[end]
     j = 2
