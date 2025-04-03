@@ -572,6 +572,77 @@ end
 
 CLT(sections) = CLT(sections, true)  # default to closed section
 
+function count_clt_elements(clt::CLT)
+    n = 0
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
+        n_seg = length(sec.y)-1
+        n += n_seg*length(sec.laminate)
+    end #End section loop
+    return n
+end
+
+"""
+    find_section_element(clt::CLT, i::Int)
+
+Find the section of a CLT object that corresponds to the ith element of the layup.
+
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the element
+
+**Returns**
+- Int: the index of the section containing the ith element
+"""
+function find_section_element(clt::CLT, i::Int)
+    idx = 1
+    for j in eachindex(clt.sections)
+        sec = clt.sections[j]
+        n_seg = length(sec.y) - 1
+        n_elem = n_seg * length(sec.laminate)
+
+        if i <= idx + n_elem - 1
+            return j
+        end
+
+        idx += n_elem
+    end
+
+    throw(ArgumentError("Element index $i is out of range for the given CLT object."))
+end
+
+"""
+    find_section_layer(clt::CLT, i::Int)
+
+Find the layer of a section corresponding to the ith element of a CLT layup.
+
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the element
+
+**Returns**
+- Tuple{Int, Int}: the section index and the layer index within the section
+"""
+function find_section_layer(clt::CLT, i::Int)
+    idx = 1
+    for j in eachindex(clt.sections)
+        sec = clt.sections[j]
+        n_seg = length(sec.y) - 1
+        n_elem = n_seg * length(sec.laminate)
+
+        if i <= idx + n_elem - 1
+            local_idx = i - idx
+            layer_idx = div(local_idx, n_seg) + 1
+            return j, layer_idx
+        end
+
+        idx += n_elem
+    end
+
+    throw(ArgumentError("Element index $i is out of range for the given CLT object."))
+end
+
+
 """
     get_clt_element_position(clt, i)
 Grab the position of the ith layer element in the CLT.
@@ -621,6 +692,17 @@ function get_clt_element_position(clt::CLT, i)
     return 0
 end
 
+"""
+    get_section_indices(clt::CLT, i)
+Get the element indices for the ith section from a CLT layup.
+
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the section
+
+**Returns**
+- Vector{Int}: the indices of the elements in the ith section
+"""
 function get_section_indices(clt::CLT, i)
     idx = 1
     n = length(clt.sections)
@@ -639,6 +721,18 @@ function get_section_indices(clt::CLT, i)
     return idxs
 end
 
+"""
+    get_section_layer_indices(section::BeamSection, indices, i_layer)
+Get the layer indices from a section. 
+
+**Arguments**
+- section::BeamSection: the section object
+- indices::Vector{Int}: the indices of the elements in the section
+- i_layer::Int: the index of the layer
+
+**Returns**
+- Vector{Int}: the indices of the elements in the i_layerth layer
+"""
 function get_section_layer_indices(section::BeamSection, indices, i_layer)
 
     n_idx = length(indices)
@@ -652,11 +746,28 @@ function get_section_layer_indices(section::BeamSection, indices, i_layer)
     return indices[i_layer:num_layers:end]
 end
 
+
+"""
+    get_section_layer_indices(clt::CLT, i, i_layer)
+Get the element indices for the ith section and the i_layerth layer from a CLT layup. 
+
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the section
+- i_layer::Int: the index of the layer
+
+**Returns**
+- Vector{Int}: the indices of the elements in the ith section and i_layerth layer
+"""
 function get_section_layer_indices(clt::CLT, i, i_layer)
     idxs = get_section_indices(clt, i)
     sec = clt.sections[i]
     return get_section_layer_indices(sec, idxs, i_layer)
 end
+
+
+
+
 
 function fullstiffnessmatrix(P, S)
     K = zeros(6, 6)
@@ -671,6 +782,8 @@ function fullstiffnessmatrix(P, S)
     return K
 end
 
+"""
+"""
 function rotatestiffnessmatrix(K, r, theta)
     R = [1.0 0 0;
         0 cos(theta) -sin(theta);
@@ -683,6 +796,58 @@ function rotatestiffnessmatrix(K, r, theta)
 
     Kp = Hinv*K*HinvT
     return Kp
+end
+
+function rotatecompliancematrix(K, r, theta)
+    R = [1.0 0 0;
+        0 cos(theta) -sin(theta);
+        0 sin(theta) cos(theta)]
+    p = [0.0 -r[3] r[2];
+        r[3] 0 -r[1];
+        -r[2] r[1] 0]
+    HinvT = [R p*R; zeros(3, 3) R]
+    # Hinv = transpose(HinvT)
+
+    HT = inv(HinvT)
+    H = transpose(HT)
+
+    Kp = HT*K*H
+    return Kp
+end
+
+
+"""
+    rotate_compliance(S, theta)
+
+Rotate the compliance matrix S by theta radians.
+
+**Arguments**
+- S::Symmetric{Float64, Matrix{Float64}}: the compliance matrix
+- theta::Float64: the angle to rotate by
+"""
+function rotate_compliance(S, theta)
+    #Todo: I don't know if the elements are in the correct order. 
+    s, c = sincos(theta)
+    s2, c2 = s^2, c^2
+    sc = s*c
+
+    Tsigma = [c2   s2   0  -2sc  0  0
+              s2   c2   0   2sc  0  0
+               0    0   1    0  0  0
+              sc  -sc   0 c2-s2 0  0
+               0    0   0    0  c -s
+               0    0   0    0  s  c] #TODO: I could mathematically invert this and code it in. 
+    
+    Tepsilon = [c2   s2   0  -sc  0  0
+                s2   c2   0   sc  0  0
+                 0    0   1    0  0  0
+                2sc  -2sc   0 c2-s2 0  0
+                 0    0   0    0  c -s
+                 0    0   0    0  s  c]
+
+    Srot = Tepsilon*S*inv(Tsigma)
+
+    return Srot
 end
 
 
@@ -1354,6 +1519,14 @@ function rotate_stress_and_strains(sigmaprime, epsilonprime, cosalpha, sinalpha)
     return sigmab, epsilonb
 end
 # TODO: create general functions for both methods (CLT and FEA)
+
+function num_strain_locs(clt::CLT)
+    ntotal = 0
+    for i in eachindex(clt.sections)
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+    return ntotal
+end
 
 
 """
@@ -2086,6 +2259,7 @@ end # End recipe
                     label --> false
                     if in(idx, highlight_idxs)
                         seriescolor --> highlight
+                        markershape --> :circle
             
                     else
                         seriescolor --> :black
@@ -2100,60 +2274,76 @@ end # End recipe
         end #end looping over segment elements
     end #End looping over sections
 
-    
 end #End recipe
 
 
+"""
 
-@recipe function plot_section_solution(sections::Array{TB, 1}, solution::Array{TF, 1}) where {TB<:BeamSection, TF}
+Notes: Check https://docs.juliaplots.org/latest/generated/colorschemes/#matplotlib for color schemes. 
+"""
+@recipe function plot_clt_solution(clt::CLT, solution::Array{TF, 1}, cgcolor; double_sol=true, highlight_idxs=[], highlight=:red, loval=minimum(solution), hival=maximum(solution), diffun=nothing) where {TF}
 
-    for i in 1:length(sections) #Loop through all the regions
-        laminate = sections[i].laminate
-        x = sections[i].y
-        y = sections[i].z
-        # x = reverse(sections[i].y) #Didn't flip the side that the laminate is on in the image. 
-        # y = reverse(sections[i].z)
+    colorbar --> true
+    fill --> true
+    clim --> (loval, hival)
 
-        # nhat = [y[1] - y[2], x[1] - x[2]] # Normal to the layup.
-        # nhat = [y[2] - y[1], x[2] - x[1]] #Didn't appear to flip the laminate. 
-        # nhat = [y[1] - y[2], x[2] - x[1]] 
-        nhat = [y[2] - y[1], x[1] - x[2]] #Todo: This makes me nervous that what I have in the beam sections is off. 
+    if isnothing(diffun)
+        diffun = x -> (x[1] + x[2])/2
+    end
 
-        nhat = nhat./norm(nhat)
+    idx = 1 #Element counter
+    sol_idx = 1
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
+        ns = length(sec.y)
 
-        nl = length(laminate)
-        np = 2nl + 2
-        xp = zeros(np)
-        yp = zeros(np)
+        for j in 1:ns-1 #Iterate over the number of elements in the section
+            x = sec.y[j+1] - sec.y[j] #The x distance between the element end points
+            y = sec.z[j+1] - sec.z[j] #The y distance between the element end points
+            L = sqrt(x^2 + y^2)
 
-        xp[1:2] = x[1:2]
-        yp[1:2] = y[1:2]
 
-        idx = 1
-        for k in 3:2:np
-            xp[k] = xp[k-2] + nhat[1]*laminate[idx].t
-            xp[k+1] = xp[k-1] + nhat[1]*laminate[idx].t
+            #Normal vector to the element
+            nx = -y/L
+            ny = x/L
 
-            yp[k] = yp[k-2] + nhat[2]*laminate[idx].t
-            yp[k+1] = yp[k-1] + nhat[2]*laminate[idx].t
-            idx += 1
-        end
+            # @show nx, ny
 
-        
-        # Loop through each layer and plot. 
-        for k in 1:nl
-            @series begin
-                j = 2*(k-1)+1
-                idxs = [j, j+1, j+3, j+2, j]
+            T = 0.0 #The total thickness travelled so far. 
+
+            for k in eachindex(sec.laminate) #Iterate over the laminates in the section
+                t = sec.laminate[k].t #The thickness of the laminate
+                
+                xp = [sec.y[j] + nx*T, sec.y[j+1] + nx*T, sec.y[j+1] + nx*(T+t), sec.y[j] + nx*(T+t), sec.y[j] + nx*T]
+                yp = [sec.z[j] + ny*T, sec.z[j+1] + ny*T, sec.z[j+1] + ny*(T+t), sec.z[j] + ny*(T+t), sec.z[j] + ny*T]
+                if double_sol
+                    # val = sum(solution[sol_idx:sol_idx+1])/2
+                    val = diffun(solution[sol_idx:sol_idx+1])
+                else
+                    val = solution[idx]
+                end
+
+                @series begin
+                    label --> false
+                    if in(idx, highlight_idxs)
+                        seriescolor --> highlight
+                        markershape --> :circle
             
-                xr = xp[idxs]
-                yr = yp[idxs]
+                    else
+                        seriescolor --> :black
+                    end
 
-                label --> false
-                seriescolor --> :black
+                    fc --> cgcolor
+                    fill_z --> val
 
-                xr, yr
-            end
-        end #end looping through laminates
-    end #End looping through sections
+                    xp, yp
+                end
+                
+                idx += 1 #Increment the element counter
+                sol_idx += 2
+                T += t #Increment the thickness
+            end #End looping over laminates
+        end #end looping over segment elements
+    end #End looping over sections
+
 end #End recipe
