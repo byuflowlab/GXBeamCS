@@ -18,22 +18,34 @@ function Qbar(lamina)
     G12 = mat.G12
     delta = 1.0/(1 - nu12*nu21)
 
-    c = cos(lamina.theta)
-    s = sin(lamina.theta)
+    s, c = sincos(lamina.theta)
+    # s = sin(lamina.theta)
     c2 = c*c
     s2 = s*s
     cs = c*s
 
     Q = Symmetric([E1*delta  nu12*E2*delta  0.0;
                   nu12*E2*delta  E2*delta  0.0;
-                  0.0  0.0  G12])
-    Ts = [c2 s2 -2*cs;
-          s2 c2 2*cs;
-          cs -cs c2-s2]
+                  0.0  0.0  G12]) #todo: These three allocations are a significant portion of allocations. 
+    # Ts = [c2 s2 -2*cs;
+    #       s2 c2 2*cs;
+    #       cs -cs c2-s2]
 
-    Te = [c2 s2 -cs;
-          s2 c2 cs;
-          2*cs -2*cs c2-s2]
+    # Te = [c2 s2 -cs;
+    #       s2 c2 cs;
+    #       2*cs -2*cs c2-s2]
+
+    # Q = @SMatrix [E1*delta  nu12*E2*delta  0.0;
+    #               nu12*E2*delta  E2*delta  0.0;
+    #               0.0  0.0  G12] #Note: For some reason I wasn't able to use a SMatrix here... 
+
+    Ts = @SMatrix [c2 s2 -2*cs;
+                   s2 c2 2*cs;
+                   cs -cs c2-s2]
+
+    Te = @SMatrix [c2 s2 -cs;
+                   s2 c2 cs;
+                   2*cs -2*cs c2-s2]
 
     Qbar = Symmetric(Ts * Q * Ts')
 
@@ -155,7 +167,7 @@ stress for a thin laminate given stresses.
 """
 function laminatestresses(laminate, epsilonp)
 
-    TF = promote_type(typeof(epsilonp[1]), typeof(laminate[1].t))
+    TF = promote_type(typeof(epsilonp[1]), typeof(laminate[1].t)) #todo: Somehow this requires a bunch of allocations. 
 
     n = length(laminate)
     sigmap = zeros(TF, 3, 2*n)
@@ -360,7 +372,7 @@ end
 
 # ------------  CLT for Beams of Laminates -----------------
 
-struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or SectionRegion, or something like that. Beam section makes it sound like it is a section of a beam (a cross section), not a section of a cross-section.
+struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or SectionRegion, or something like that. Beam section makes it sound like it is a section of a beam (a cross section), not a section of a cross-section. -> Segment might also be a good name. -> segments are passed in... so maybe not. 
     laminate::VL  #Vector{Lamina}
     y::VF  # Vector{Float}
     z::VF  # Vector{Float}
@@ -403,7 +415,7 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     
     
 
-    # le_idx = argmin(x) #Todo: This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
+    # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
     xtop = reverse(x[1:le_idx])
     ytop = reverse(y[1:le_idx]) 
     xbot = x[le_idx:end] #Todo: I probably need to know if the LE is repeated. 
@@ -418,7 +430,7 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     layertype = typeof(segments[1])
     floattype = promote_type(typeof(x[1]), typeof(chord), typeof(twist), typeof(paxis))
 
-    sections = Vector{BeamSection{layertype, Vector{floattype}}}(undef, ns) #Todo: Typing
+    sections = Vector{BeamSection{layertype, Vector{floattype}}}(undef, ns) 
 
     s, c = sincos(twist) #I think applied twist correctly. 
     xc = paxis * chord
@@ -572,6 +584,17 @@ end
 
 CLT(sections) = CLT(sections, true)  # default to closed section
 
+
+"""
+    count_clt_elements(clt::CLT)
+Count the number of elements in a CLT object.
+
+**Arguments**
+- clt::CLT: the CLT object
+
+**Returns**
+- Int: the number of elements in the CLT object
+"""
 function count_clt_elements(clt::CLT)
     n = 0
     for i in eachindex(clt.sections)
@@ -1589,23 +1612,29 @@ function strains_and_stresses(F, M, clt::CLT)
             ca = (yp[k] - yp[k-1])/b
             sa = (zp[k] - zp[k-1])/b
 
-            Rk = [1.0 zbar ybar 0.0;
-                0.0 ca -sa 0.0;
-                0.0 sa ca 0.0;
-                0 0 0 1]
+            # Rk = [1.0 zbar ybar 0.0;
+            #     0.0 ca -sa 0.0;
+            #     0.0 sa ca 0.0;
+            #     0 0 0 1] #todo: a significant number of allocations
 
             eta = 0.0  # just compute at midpoint
-            Reta = [1.0 0 eta 0;
-                    0 1 0 0;
-                    0 0 0 -2]
+            # Reta = [1.0 0 eta 0;
+            #         0 1 0 0;
+            #         0 0 0 -2] #todo: a significant number of allocations
+
+            RetaRk = @SMatrix [1.0 zbar+(sa*eta) ybar+(ca*eta) 0.0;
+                       0.0 ca -sa 0.0;
+                       0.0 0.0 0.0 -2.0] #todo: a significant number of allocations
 
             # pg 270
             if clt.closed_section
                 NM1 = cc.F\cc.L*cc.Wbar*FMvec
-                NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
-                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12
+                # NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
+                NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. 
             else
-                NM = muk\Reta*Rk*cc.Wbar*FMvec
+                # NM = muk\Reta*Rk*cc.Wbar*FMvec
+                NM = muk\RetaRk*cc.Wbar*FMvec
                 forces = [NM[1]; 0.0; 0.0; NM[2]; 0.0; NM[3]]
             end
 

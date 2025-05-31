@@ -90,6 +90,10 @@ along the beam axis.
 MaterialPlane(E1, E2, G12, nu12, rho, S1t, S1c, S2t, S2c, S12) = Material(E1, E2, 0.0, G12, 0.0, 0.0, nu12, 0.0, 0.0, rho,
                                                                             S1t, S1c, S2t, S2c, 0.0, 0.0, S12, 0.0, 0.0)
 
+# IsotropicMaterial(E, G, nu, rho, Stc, S) = Material(E, E, E, G, G, G, nu, nu, nu, rho,
+#     Stc, Stc, Stc, Stc, Stc, Stc, S, S, S)
+
+# IsotropicMaterial(E, G, nu, rho) = IsotropicMaterial(E, G, nu, rho, 1.0, 1.0)
 # --------------------------
 
 # --------- composite layer -------------
