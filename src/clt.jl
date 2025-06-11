@@ -788,7 +788,22 @@ function get_section_layer_indices(clt::CLT, i, i_layer)
     return get_section_layer_indices(sec, idxs, i_layer)
 end
 
+"""
+    get_section_thickness(clt::CLT, i)
+Get the thickness of the ith section in a CLT layup.
 
+**Arguments**
+- clt::CLT: the CLT object
+- i::Int: the index of the section
+
+**Returns**
+- Float64: the thickness of the ith section
+"""
+function get_section_thickness(clt::CLT, i)
+    
+    sec = clt.sections[i]
+    return sum(l.t for l in sec.laminate)
+end
 
 
 
@@ -1561,6 +1576,12 @@ Compute strains and stresses in the beam sections.
 - F::Vector{TF}: forces in the beam
 - M::Vector{TF}: moments in the beam
 - clt::CLT: composite section
+
+**Returns**
+- `strain_b::Vector(6, ne)`: strains in beam coordinate system for each element. order: xx, yy, zz, xy, xz, yz
+- `stress_b::Vector(6, ne)`: stresses in beam coordinate system for each element. order: xx, yy, zz, xy, xz, yz
+- `strain_p::Vector(6, ne)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+- `stress_p::Vector(6, ne)`: stresses in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
 """
 function strains_and_stresses(F, M, clt::CLT)
     # map GXBeam forces to internal order
