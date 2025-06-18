@@ -402,7 +402,7 @@ Creates a vector of BeamSections from the information for the airfoil mesh.
 **Returns**
 
 """
-function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima, le_idx=argmin(x), turbine=false)
+function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima, le_idx=argmin(x))
     ### Check that inputs are good. 
     if length(x) != length(y)
         throw(ArgumentError("x and y must have the same length"))
@@ -413,9 +413,6 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
         throw(ArgumentError("x must start at 0 and end at 1"))
     end
     
-    if turbine
-        y .*= -1
-    end
 
     # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
     xtop = reverse(x[1:le_idx])
