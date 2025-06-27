@@ -417,19 +417,27 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
     xtop = reverse(x[1:le_idx])
     ytop = reverse(y[1:le_idx]) 
-    xbot = x[le_idx:end] #Todo: I probably need to know if the LE is repeated. 
+    xbot = x[le_idx:end] #todo: I probably need to know if the LE is repeated. 
     ybot = y[le_idx:end]
     topfit = fit(xtop, ytop)
     botfit = fit(xbot, ybot)
 
-    nw = length(web_segments) #Todo: Maybe add multiple points for web? -> Don't know if it changes anything. 
+    nw = length(web_segments) #todo: Maybe add multiple points for web? -> Don't know if it changes anything. 
     nb = length(xbreak)
     ns = 2*(nb - 1) + nw #Number of regions
 
     layertype = typeof(segments[1])
     floattype = promote_type(typeof(x[1]), typeof(chord), typeof(twist), typeof(paxis))
 
-    sections = Vector{BeamSection{layertype, Vector{floattype}}}(undef, ns) 
+
+    vectortype = Vector{floattype}
+    sections = Vector{BeamSection{layertype, vectortype}}(undef, ns) 
+
+    
+    # @show vectortype
+    # println("")
+
+    # sections = Vector{BeamSection{layertype, vectortype}}(undef, ns) 
 
     s, c = sincos(twist) #I think applied twist correctly. 
     xc = paxis * chord
@@ -494,61 +502,127 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
 
     return sections
 end
-# function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima) #Note: This implementation is closer in some ways and further in others. I'm going with the above implementation because it follows the structur of BeamSections more closely. 
-#     ### Check that inputs are good. 
-#     if length(x) != length(y)
-#         throw(ArgumentError("x and y must have the same length"))
-#     end
-#     #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
 
-#     if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
-#         throw(ArgumentError("x must start at 0 and end at 1"))
-#     end
+function make_top_section(xtop, ytop, chord, s, c, xc, xbreak, segments, i)
     
+    ### Top
+    idx_inner = findfirst(x -> x >= xbreak[i+1], xtop)
+    idx_inner = xtop[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
+
+    if i == 1
+        idx_outer_top = 1
+    else
+        idx_outer_top = findfirst(x -> x >= xbreak[i], xtop)
+        idx_outer_top = xtop[idx_outer_top] != xbreak[i] ? idx_outer_top - 1 : idx_outer_top
+    end
+
+    #Scale the coordinates
+    xi = xtop[idx_outer_top:idx_inner]*chord 
+    yi = ytop[idx_outer_top:idx_inner]*chord
+
+    #Rotate about the pitch axis.
+    x_i = @. (xi - xc)*c + yi*s + xc
+    y_i = @. -(xi - xc)*s + yi*c
+    
+    section = BeamSection(segments[i], reverse(x_i), reverse(y_i))
+
+    return section
+end
+
+function make_bot_section(xbot, ybot, chord, s, c, xc, xbreak, segments, i)
+    ### Bottom
+    idx_inner = findfirst(x -> x >= xbreak[i+1], xbot)
+    idx_inner = xbot[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
+
+    if i == 1
+        idx_outer_bot = 1
+    else
+        idx_outer_bot = findfirst(x -> x >= xbreak[i], xbot)
+        idx_outer_bot = xbot[idx_outer_bot] != xbreak[i] ? idx_outer_bot - 1 : idx_outer_bot
+    end
+
+    xi = xbot[idx_outer_bot:idx_inner]*chord
+    yi = ybot[idx_outer_bot:idx_inner]*chord
+
+    x_i = @. (xi - xc)*c + yi*s + xc
+    y_i = @. -(xi - xc)*s + yi*c
+    
+    section = BeamSection(segments[i], x_i, y_i)
+
+    return section
+end
+
+function make_web_section(topfit, botfit, webloc, chord, s, c, xc, web_segment)
+    
+        #Get the upper and lower coordinates of the web.
+    ytop = topfit(webloc)
+    ybot = botfit(webloc)
+    xi = [webloc, webloc].*chord
+    yi = [ybot, ytop].*chord
+
+    #Rotate about the pitch axis. 
+    x_i = @. (xi - xc)*c + yi*s + xc 
+    y_i = @. -(xi - xc)*s + yi*c
+
+    section = BeamSection(web_segment, x_i, y_i)   
+    return section
+end
+
+"""
+An out of place verion of `get_beam_sections()` for ReverseDiff compatibility.
+"""
+function get_beam_sections_oop(x, y, chord, twist, paxis, xbreak, weblocs, segments, web_segments; fit=Akima, le_idx=argmin(x))
+    ### Check that inputs are good. 
+    if length(x) != length(y)
+        throw(ArgumentError("x and y must have the same length"))
+    end
+    #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
+
+    if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
+        throw(ArgumentError("x must start at 0 and end at 1"))
+    end
     
 
-#     ns = length(x) - 1
-#     # n = length(xbreak) - 1 #Number of regions
+    # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
+    xtop = reverse(x[1:le_idx])
+    ytop = reverse(y[1:le_idx]) 
+    xbot = x[le_idx:end] #todo: I probably need to know if the LE is repeated. 
+    ybot = y[le_idx:end]
+    topfit = fit(xtop, ytop)
+    botfit = fit(xbot, ybot)
 
-#     sections = Vector{BeamSection}(undef, ns) #Todo: Typing
+    nw = length(web_segments) #todo: Maybe add multiple points for web? -> Don't know if it changes anything. 
+    nb = length(xbreak)
+    ns = 2*(nb - 1) + nw #Number of regions
 
-#     s, c = sincos(twist) #I think applied twist correctly. 
-#     xc = paxis * chord
-#     for i = 1:ns #Iterate over the af coordinates and create a sections
-#         xbar = (x[i] + x[i+1])/2 #Midpoint of the section
-#         idx = findfirst(x ->  x >= xbar, xbreak) - 1 #Find which region of the cross-section the section is. 
+    layertype = typeof(segments[1])
+    floattype = promote_type(typeof(x[1]), typeof(chord), typeof(twist), typeof(paxis))
 
-#         y_i = @. (x[i:i+1]*chord - xc)*c + y[i:i+1]*s + xc
-#         z_i = @. -(x[i:i+1] - xc)*s + y[i:i+1].*chord*c
-#         # x = nodes[i].x
-#         # y = nodes[i].y
-#         # nodes[i] = Node((x - xc)*c + y*s + xc, -(x - xc)*s + y*c)
-#         # sections[i] = BeamSection(segments[idx], y_i, z_i)
-#         sections[i] = BeamSection(segments[idx], reverse(y_i), reverse(z_i))
-#     end
 
-#     ### Add in the webs
-#     idx = argmin(x) #todo: This might not split the airfoils well. 
-#     xtop = reverse(x[1:idx])
-#     ytop = reverse(y[1:idx])
-#     xbot = x[idx+1:end]
-#     ybot = y[idx+1:end]
-#     topfit = fit(xtop, ytop)
-#     botfit = fit(xbot, ybot)
+    vectortype = Vector{floattype}
+    sections = Vector{BeamSection{layertype, vectortype}}(undef, ns) 
 
-#     websections = Vector{BeamSection}(undef, length(weblocs))
-#     for i in eachindex(weblocs)
-#         y_i = [weblocs[i], weblocs[i]].*chord
-#         ztop = topfit(weblocs[i])
-#         zbot = botfit(weblocs[i])
-#         z_i = [zbot, ztop].*chord
-#         y_i = @. (y_i - xc)*c + z_i*s + xc
-#         z_i = @. -(y_i - xc)*s + z_i*c
-#         websections[i] = BeamSection(web_segments[i], y_i, z_i)
-#     end
+    
+    # @show vectortype
+    # println("")
 
-#     return vcat(sections, websections)
-# end
+    # sections = Vector{BeamSection{layertype, vectortype}}(undef, ns) 
+
+    s, c = sincos(twist) #I think applied twist correctly. 
+    xc = paxis * chord
+    
+
+    top_sections = [make_top_section(xtop, ytop, chord, s, c, xc, xbreak, segments, i) for i in 1:(nb-1)]
+    bot_sections = [make_bot_section(xbot, ybot, chord, s, c, xc, xbreak, segments, i) for i in 1:(nb-1)]
+
+
+    # i in eachindex(weblocs)
+    web_sections = [make_web_section(topfit, botfit, weblocs[i], chord, s, c, xc, web_segments[i]) for i in eachindex(weblocs)]
+
+    sections = vcat(top_sections, bot_sections, web_sections)
+
+    return sections
+end
 
 
 
@@ -1010,31 +1084,33 @@ function compliance_matrix(clt::CLT, shear_center=true)
 end
 
 
-
+function mass_matrix_clt(clt::CLT; reference=nothing)
+    return mass_matrix(clt.sections; reference=reference)
+end
 
 
 """
-    mass_matrix(clt::CLT)
+    mass_matrix(sections::Vector{BeamSection}; reference=nothing)
 
 Finding the mass matrix of the composite section.
 
 **Arguments**
-- clt::CLT: the composite section
+- sections::Vector{BeamSection}: a vector of beam sections, each with a `laminate` field containing the laminates in the section.
 - reference::Vector{Float64}: the reference frame for the mass matrix: [x, y, theta]. x, y are the origin of the reference frame (often some percentage of the chord), and theta is the twist angle.
 
 **Returns**
 - M: the mass matrix
 - [xm, ym]: the center of mass
 """
-function mass_matrix(clt::CLT; reference=nothing)
+function mass_matrix(sections; reference=nothing)
 
     mass = 0.0 #TODO: Typing? -> Dr. Ning uses this. 
     #Center of mass
     xm = 0.0 
     ym = 0.0
 
-    for i in eachindex(clt.sections)
-        sec = clt.sections[i]
+    for i in eachindex(sections)
+        sec = sections[i]
 
         ns = length(sec.y)
 
@@ -1083,8 +1159,8 @@ function mass_matrix(clt::CLT; reference=nothing)
     Iyy = 0.0
     Ixy = 0.0
 
-    for i in eachindex(clt.sections)
-        sec = clt.sections[i]
+    for i in eachindex(sections)
+        sec = sections[i]
 
         ns = length(sec.y)
 

@@ -8,6 +8,7 @@ using LinearAlgebra
 using DelimitedFiles
 using RecipesBase
 using ImplicitAD
+using ReverseDiff
 
 # from common
 export Material, MaterialPlane, Layer
