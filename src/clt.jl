@@ -24,9 +24,19 @@ function Qbar(lamina)
     s2 = s*s
     cs = c*s
 
-    Q = Symmetric([E1*delta  nu12*E2*delta  0.0;
-                  nu12*E2*delta  E2*delta  0.0;
-                  0.0  0.0  G12]) #todo: These three allocations are a significant portion of allocations. 
+    Q = Symmetric([
+        E1*delta  nu12*E2*delta  0.0;
+        nu12*E2*delta  E2*delta  0.0;
+        0.0  0.0  G12])
+
+    # Q = @SMatrix [E1*delta  nu12*E2*delta  0.0;
+    #               nu12*E2*delta  E2*delta  0.0;
+    #               0.0  0.0  G12] #todo: These three allocations are a significant portion of allocations. 
+    
+    # Q = Symmetric(Q) #Note: Speedup, but creates a typing problem later on for inv(A)
+
+    # @show typeof(Q)
+
     # Ts = [c2 s2 -2*cs;
     #       s2 c2 2*cs;
     #       cs -cs c2-s2]
@@ -48,6 +58,8 @@ function Qbar(lamina)
                    2*cs -2*cs c2-s2]
 
     Qbar = Symmetric(Ts * Q * Ts')
+
+    # @show typeof(Qbar)
 
     return Qbar, Ts, Te
 end
@@ -114,9 +126,55 @@ function laminatestiffnessmatrix(laminate, z)
 end
 
 """
+    inv3x3(A::AbstractMatrix{T}) where T
+
+Analytically computes the inverse of a 3x3 matrix A.
+
+Returns the inverse matrix if A is invertible.
+"""
+function inv3x3(A::AbstractMatrix{T}) where T #Todo: WAY WAY slower than inv(A)
+    @assert size(A) == (3, 3) "Matrix must be 3x3"
+
+    a, b, c = A[1,1], A[1,2], A[1,3]
+    d, e, f = A[2,1], A[2,2], A[2,3]
+    g, h, i = A[3,1], A[3,2], A[3,3]
+
+    detA = a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g)
+    @assert detA != 0 "Matrix is singular"
+
+    # invA = similar(A) #Todo: double check that this math is correct. -> Error is 2e-13... which is higher than expected. -> The math matches a source online. 
+    # invA[1,1] =  (e*i - f*h) / detA
+    # invA[1,2] = -(b*i - c*h) / detA
+    # invA[1,3] =  (b*f - c*e) / detA
+    # invA[2,1] = -(d*i - f*g) / detA
+    # invA[2,2] =  (a*i - c*g) / detA
+    # invA[2,3] = -(a*f - c*d) / detA
+    # invA[3,1] =  (d*h - e*g) / detA
+    # invA[3,2] = -(a*h - b*g) / detA
+    # invA[3,3] =  (a*e - b*d) / detA
+
+    invA11 =  (e*i - f*h) / detA
+    invA12 = -(b*i - c*h) / detA
+    invA13 =  (b*f - c*e) / detA
+    invA21 = -(d*i - f*g) / detA
+    invA22 =  (a*i - c*g) / detA
+    invA23 = -(a*f - c*d) / detA
+    invA31 =  (d*h - e*g) / detA
+    invA32 = -(a*h - b*g) / detA
+    invA33 =  (a*e - b*d) / detA
+
+    invA = @SMatrix [invA11 invA12 invA13;
+                   invA21 invA22 invA23;
+                   invA31 invA32 invA33]
+    
+    return invA
+end
+
+"""
 Compute the alpha, beta, delta compliance matrices for a thin laminate given the stiffness matrices
 """
 function laminatecompliancematrix(A, B, D)
+    # @show size(A), size(B), size(D)
     Ainv = inv(A)
     Hinv = Symmetric(inv(D - B*Ainv*B))
     alpha = Symmetric(Ainv + Ainv*B*Hinv*B*Ainv)
@@ -1726,8 +1784,8 @@ function strains_and_stresses(F, M, clt::CLT)
             if clt.closed_section
                 NM1 = cc.F\cc.L*cc.Wbar*FMvec
                 # NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
-                NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
-                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. 
+                NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec #todo: A significant number of allocations
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. #todo: A significant number of allocations. 
             else
                 # NM = muk\Reta*Rk*cc.Wbar*FMvec
                 NM = muk\RetaRk*cc.Wbar*FMvec
