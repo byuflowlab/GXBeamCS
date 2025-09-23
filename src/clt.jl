@@ -429,12 +429,26 @@ function buckling_strain(epsilon, laminate, b)
 end
 
 # ------------  CLT for Beams of Laminates -----------------
-
-struct BeamSection{VL, VF} #Note: I suggest that we rename this to Region, or SectionRegion, or something like that. Beam section makes it sound like it is a section of a beam (a cross section), not a section of a cross-section. -> Segment might also be a good name. -> segments are passed in... so maybe not. 
+#Todo: I suggest that we rename this to Region, or SectionRegion, or something like that. Beam section makes it sound like it is a section of a beam (a cross section), not a section of a cross-section. -> Segment might also be a good name. -> segments are passed in... so maybe not. 
+struct BeamSection{VL, VF} 
     laminate::VL  #Vector{Lamina}
     y::VF  # Vector{Float}
     z::VF  # Vector{Float}
 end
+# struct BeamSection{VL, TF} 
+#     laminate::VL  #Vector{Lamina}
+#     y::AbstractVector{TF}  # Vector{Float}
+#     z::AbstractVector{TF}  # Vector{Float}
+# end
+# struct BeamSection{VL, VF1, VF2} 
+#     laminate::VL  #Vector{Lamina}
+#     y::VF1  # Vector{Float}
+#     z::VF2  # Vector{Float}
+# end
+
+# function BeamSection(laminate, y, z)
+#     return BeamSection(laminate, promote(y, z)...)
+# end
 
 function get_section_floattype(section)
     return promote_type(typeof(section.y[1]), typeof(section.z[1]))
@@ -467,9 +481,9 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     end
     #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
 
-    if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
-        throw(ArgumentError("x must start at 0 and end at 1"))
-    end
+    # if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
+    #     throw(ArgumentError("x must start at 0 and end at 1"))
+    # end
     
 
     # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
@@ -487,9 +501,16 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     layertype = typeof(segments[1])
     floattype = promote_type(typeof(x[1]), typeof(chord), typeof(twist), typeof(paxis))
 
-
-    vectortype = Vector{floattype}
-    sections = Vector{BeamSection{layertype, vectortype}}(undef, ns) 
+    # @show floattype <: ReverseDiff.TrackedReal
+    # vectortype = Vector{floattype}
+    # vectortype = AbstractVector{floattype}
+    if floattype <: ReverseDiff.TrackedReal
+        sections = Vector{BeamSection{layertype, ReverseDiff.TrackedArray{Float64, Float64, 1, Vector{Float64}, Vector{Float64}}}}(undef, ns) 
+        # sections = Vector{BeamSection{layertype, Vector{ReverseDiff.TrackedReal{Float64, Float64, ReverseDiff.TrackedArray{Float64, Float64, 1, Vector{Float64}, Vector{Float64}}}}}}(undef, ns) 
+    else
+        sections = Vector{BeamSection{layertype, Vector{floattype}}}(undef, ns) 
+    end
+    # sections = Vector{BeamSection{layertype, AbstractVector{floattype}}}(undef, ns) 
 
     
     # @show vectortype
@@ -504,6 +525,7 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     # @show xc, s, c
     
     for i = 1:(nb-1) #Iterate over the regions
+        # println(i)
         ### Top
         idx_inner = findfirst(x -> x >= xbreak[i+1], xtop)
         idx_inner = xtop[idx_inner] != xbreak[i+1] ? idx_inner - 1 : idx_inner
@@ -515,7 +537,11 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
         #Rotate about the pitch axis.
         x_i = @. (xi - xc)*c + yi*s + xc
         y_i = @. -(xi - xc)*s + yi*c
-        
+        # @show typeof(segments[i])
+        # @show typeof(x_i)
+        # @show typeof(y_i)
+        # println("")
+
         sections[i] = BeamSection(segments[i], reverse(x_i), reverse(y_i))
 
         #Update the outer index
@@ -636,9 +662,9 @@ function get_beam_sections_oop(x, y, chord, twist, paxis, xbreak, weblocs, segme
     end
     #Todo: Check that xbreak starts and ends with 0 and 1, respectively.
 
-    if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
-        throw(ArgumentError("x must start at 0 and end at 1"))
-    end
+    # if !isapprox(minimum(x), 0) || !isapprox(maximum(x), 1)
+    #     throw(ArgumentError("x must start at 0 and end at 1"))
+    # end
     
 
     # le_idx = argmin(x) #Todo. This might not capture the LE of the airfoil. -> Sticking it as an optional argument so the user can specify it. 
@@ -692,8 +718,9 @@ struct CLTCache{TM1, TM2, TM3, TM4}
     S::TM4
 end
 
-struct CLT{TL, TF, TM1, TM2, TM3, TM4} <: CompositeSectionAnalysis 
-    sections::Vector{BeamSection{TL, TF}}  # a vector of beam sections
+struct CLT{TS, TM1, TM2, TM3, TM4} <: CompositeSectionAnalysis 
+    # sections::Vector{BeamSection{TL, TF}}  # a vector of beam sections
+    sections::TS  # a vector of beam sections
     closed_section::Bool
     cache::CLTCache{TM1, TM2, TM3, TM4}
 end
@@ -1139,6 +1166,127 @@ function compliance_matrix(clt::CLT, shear_center=true)
 
     # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
     return Sfull, sc, tc
+end
+
+
+function compliance_matrix(sections::Vector{BeamSection}; closed_section=true, shear_center=true)
+
+    m = length(sections) #number of sections
+
+    Pbar = zeros(4, 4) #Todo: Fix the typing. 
+    Im = zeros(2, 4)
+    F = zeros(2, 2)
+    A = 0.0
+
+    for i = 1:m #Iterate over the number of sections
+        sec = sections[i]
+        yp = sec.y #The coordinates of the section
+        zp = sec.z
+        n = length(yp) #The number of points in the section
+
+        alpha, beta, delta = laminatecompliance(sec.laminate)
+        a = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+                 beta[1, 1] delta[1, 1] delta[1, 3];
+                 beta[1, 3] delta[1, 3] delta[3, 3]])
+        atinv = (a[2, 2]*a[3, 3] - a[2, 3]^2) / det(a)
+        # Atilde = inv(atilde)  # TODO: we only need (1, 1) component so don't need to invert everything
+
+        for k = 2:n #Iterate over the "elements" in the section
+            ybar = (yp[k-1] + yp[k])/2 #The element midpoint
+            zbar = (zp[k-1] + zp[k])/2
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2) #The length of the element
+            ca = (yp[k] - yp[k-1])/b #The cosine of the angle of the element #Todo: Will this correctly orient elements? Check the math.
+            sa = (zp[k] - zp[k-1])/b #The sine of the angle of the element
+            #Add the element area to the cross section area #TODO: Wait... A is reset at the beginning of the function, so this is like the cumulative area of all the sections? 
+            A += 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula)
+
+            Rk = [1.0 zbar ybar 0.0;
+                0.0 ca -sa 0.0;
+                0.0 sa ca 0.0;
+                0 0 0 1] #Todo: What is this matrix? -> It looks like a rotation matrix, but it is a 4x4 and also has the midpoints on it. 
+            omega = 1.0/b*Symmetric([
+                    alpha[1, 1] beta[1, 1] 0.0 -beta[1, 3]/2.0;
+                    beta[1, 1] delta[1, 1] 0.0 -delta[1, 3]/2.0;
+                    0 0 12.0/(atinv*b^2) 0; #Note: b changes every k iteration, so this must be created every iteration. 
+                    -beta[1, 3]/2.0 -delta[1, 3]/2.0 0 delta[3, 3]/4.0])
+            # omegainv = inv(omega)
+            Pbar += Rk'*(omega\Rk)
+
+            I1 = [alpha[1, 3] beta[3, 1] 0.0 -beta[3, 3]/2.0;
+                  beta[1, 2] delta[1, 2] 0.0 -delta[2, 3]/2.0]
+            Im += I1*(omega\Rk)  # repeated, could cache
+
+            F1 = [alpha[3, 3] beta[3, 2];
+                 beta[3, 2] delta[2, 2]]
+            F += b*F1 - I1*(omega\I1')
+        end
+
+        # if i <= 10   #TODO: temporary hack
+        #     A += abs(Asub)/2.0
+        # end
+        # A += Asub/2.0
+    end
+    L = -Im
+    L[1, 4] += 2*A
+    if closed_section
+        Pbar += L'*(F\L)
+    end
+    Wbar = inv(Symmetric(Pbar))
+    cent = -Symmetric([Wbar[2, 2] Wbar[2, 3]; Wbar[2, 3] Wbar[3, 3]]) \ [Wbar[1, 2]; Wbar[1, 3]]
+    zc = cent[1]; yc = cent[2]
+
+    Rb = [1.0 0 0 0;
+          zc 1 0 0;
+          yc 0 1 0;
+          0 0 0 1]
+    S = Symmetric(Rb'*Wbar*Rb)  # compliance
+    # K = inv(S)
+    sc = [0.0, 0.0]  #Shear Center #Todo: 
+    tc = [yc, zc] #Tension Center
+
+    TF = eltype(S)
+    Sfull = zeros(TF, 6, 6)
+    idx = [1, 5, 6, 4]
+    for i = 1:4
+        for j = i:4
+            Sfull[idx[i], idx[j]] = S[i, j]
+        end
+    end
+ 
+    # clt.cache.S .= S #Todo. Does this S need the effect from the shear flow? -> It looks like shear flow doesn't replace any of the indices in S, so it should be fine.
+
+
+    if closed_section
+        s, S, ysc, zsc = shearflow_general_attempt(clt.sections, Wbar, F, L, yc, zc) 
+        # s, S, ysc, zsc = shearflow(clt.sections, S, yc, zc; closedsection=clt.closed_section) #Super mega slow. Todo: I'm not sure on the S input. 
+        Sfull[2, 2] = s[1, 1]
+        Sfull[3, 3] = s[2, 2]
+
+        # sc = [ysc, zsc] #Note: I don't think ysc and zsc are actual the shear center coordinates. 
+        # Sfull[2, 2] = s[2, 2]
+        # Sfull[3, 3] = s[1, 1]
+    end
+
+
+    Sfull = Symmetric(Sfull)
+
+    # move to sc
+    if shear_center
+        ysc = sc[1]; zsc = sc[2]
+        P = [0 zsc -ysc; -zsc 0 0; ysc 0 0]
+        Hinv = [I P; zeros(3, 3) I]
+        HinvT = [I zeros(3, 3); transpose(P) I]
+        Sfull = Hinv * Sfull * HinvT
+    end
+
+    # save entries in cache for strain evaluation
+    # clt.cache.F .= F
+    # clt.cache.L .= L
+    # clt.cache.Wbar .= Wbar
+    # clt.cache.S .= S
+
+    # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
+    return Sfull, sc, tc, F, L, Wbar, S
 end
 
 
@@ -1782,10 +1930,143 @@ function strains_and_stresses(F, M, clt::CLT)
 
             # pg 270
             if clt.closed_section
-                NM1 = cc.F\cc.L*cc.Wbar*FMvec
+                # @show typeof(cc.F)
+                # @show typeof(cc.L)
+                # @show typeof(cc.Wbar)
+                # @show typeof(FMvec)
+                if isa(cc.Wbar[1], ReverseDiff.TrackedReal)
+                    NM1 = cc.F\cc.L*Matrix(cc.Wbar)*FMvec
+                    # NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
+                    # NM2 = Matrix((muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec) #todo: A significant number of allocations - Fails under reverseDiff
+                    NM2 = (Matrix(muk)\(RetaRk - nuk*(cc.F\cc.L)))*Matrix(cc.Wbar)*FMvec #todo: A significant number of allocations
+                else
+                    NM1 = cc.F\cc.L*cc.Wbar*FMvec
+                    # NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
+                    NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec #todo: A significant number of allocations
+                end
                 # NM2 = (muk\(Reta*Rk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec
-                NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec #todo: A significant number of allocations
-                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. #todo: A significant number of allocations. 
+                # NM2 = (muk\(RetaRk - nuk*(cc.F\cc.L)))*cc.Wbar*FMvec #todo: A significant number of allocations
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. #todo: A significant number of allocations. #Todo: Can this be a static array? This looks like static array material. 
+            else
+                # NM = muk\Reta*Rk*cc.Wbar*FMvec
+                NM = muk\RetaRk*cc.Wbar*FMvec
+                forces = [NM[1]; 0.0; 0.0; NM[2]; 0.0; NM[3]]
+            end
+
+            _, _, _, epsilonprime = laminatestrains(alpha, beta, delta, sec.laminate, forces)
+            sigmaprime, sigma_p, epsilon_p = laminatestresses(sec.laminate, epsilonprime)
+
+
+            # remap from internal representation to common representation
+            # epsilonp is 11, 22, 12 (other 3 components are zero)  TODO: 33 is actually not zero
+            # strain_p::Vector(6, nloc)`: strains in ply coordinate system for each element. order: 11, 22, 33, 12, 13, 23
+            _, nz = size(epsilonprime)
+            strain_p[1, idx:idx+nz-1] = epsilon_p[1, :]
+            strain_p[2, idx:idx+nz-1] = epsilon_p[2, :]
+            strain_p[4, idx:idx+nz-1] = epsilon_p[3, :]
+
+            stress_p[1, idx:idx+nz-1] = sigma_p[1, :]
+            stress_p[2, idx:idx+nz-1] = sigma_p[2, :]
+            stress_p[4, idx:idx+nz-1] = sigma_p[3, :]
+
+            # iz = [1, 1]
+            # for iii = 2:length(sec.laminate)*2
+            #     iz = [iz; iii; iii]
+            # end
+
+            # for ir = idx:idx+nz-1
+            #     thetak = sec.laminate[iz[ir - idx + 1]].theta
+            #     stress_b[:, ir], strain_b[:, ir] = rotate_stress_and_strains(stress_p[:, ir], strain_p[:, ir], thetak, ca, sa)
+            # end
+
+            sigma_temp = zeros(TF, 6)
+            epsilon_temp = zeros(TF, 6)
+            for ir = idx:idx+nz-1
+                sigma_temp[[1, 2, 4]] .= sigmaprime[:, ir-idx+1]
+                epsilon_temp[[1, 2, 4]] .= epsilonprime[:, ir-idx+1]
+                stress_b[:, ir], strain_b[:, ir] = rotate_stress_and_strains(sigma_temp, epsilon_temp, ca, sa)
+            end
+
+            idx += nz
+
+        end
+    end
+
+
+    return strain_b, stress_b, strain_p, stress_p
+end
+
+#Todo: The point of this is to avoid pre-allocations. But maybe I just create a pre-allocated CLT cache object that accepts a typing argument. 
+function strains_and_stresses(F, M, sections, cache::NamedTuple; closed_section=true)
+    # map GXBeam forces to internal order
+    Nxbar = F[1]  # deformations due to shear neglected in this method
+    Txbar, Mybar, Mzbar = M
+    Mzbar *= -1  # opposite sign convention used internally
+    FMvec = [Nxbar; Mybar; Mzbar; Txbar]
+
+    # rename for convenience
+    # cc = clt.cache
+
+    # number of sections
+    m = length(clt.sections)
+
+    # count how many locations I have to compute strain at
+    ntotal = 0
+    for i = 1:m
+        ntotal += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+
+    ### Preallocate
+    #Get the typing for the arrays
+    TF = promote_type(typeof(F[1]), typeof(M[1]), typeof(clt.sections[1].y[1]))
+
+    strain_p = zeros(TF, 6, ntotal) 
+    stress_p = zeros(TF, 6, ntotal)
+    strain_b = zeros(TF, 6, ntotal)
+    stress_b = zeros(TF, 6, ntotal)
+
+    idx = 1
+    for sec in clt.sections #Iterate across the sectinos
+        
+        yp = sec.y
+        zp = sec.z
+        n = length(yp)
+
+        alpha, beta, delta = laminatecompliance(sec.laminate)
+        muk = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+            beta[1, 1] delta[1, 1] delta[1, 3]
+            beta[1, 3] delta[1, 3] delta[3, 3]])
+        nuk = [alpha[1, 3] beta[1, 2]
+            beta[3, 1] delta[1, 2]
+            beta[3, 3] delta[2, 3]]
+
+        for k = 2:n #Iterate across the elements in the section
+            ybar = (yp[k-1] + yp[k])/2
+            zbar = (zp[k-1] + zp[k])/2
+            b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2)
+            ca = (yp[k] - yp[k-1])/b
+            sa = (zp[k] - zp[k-1])/b
+
+            # Rk = [1.0 zbar ybar 0.0;
+            #     0.0 ca -sa 0.0;
+            #     0.0 sa ca 0.0;
+            #     0 0 0 1] #todo: a significant number of allocations
+
+            eta = 0.0  # just compute at midpoint
+            # Reta = [1.0 0 eta 0;
+            #         0 1 0 0;
+            #         0 0 0 -2] #todo: a significant number of allocations
+
+            RetaRk = @SMatrix [1.0 zbar+(sa*eta) ybar+(ca*eta) 0.0;
+                       0.0 ca -sa 0.0;
+                       0.0 0.0 0.0 -2.0] #todo: a significant number of allocations
+
+            # pg 270
+            if clt.closed_section
+                NM1 = cache.F\cache.L*cache.Wbar*FMvec
+                # NM2 = (muk\(Reta*Rk - nuk*(cache.F\cache.L)))*cache.Wbar*FMvec
+                NM2 = (muk\(RetaRk - nuk*(cache.F\cache.L)))*cc.Wbar*FMvec #todo: A significant number of allocations
+                forces = [NM2[1]; 0.0; NM1[1]; NM2[2]; NM1[2]; NM2[3]]  # N1, N2, N12, M1, M2, M12 #Note: coud probably just directly multiply out the elements and form the forces vector directly. #todo: A significant number of allocations. #Todo: Can this be a static array? This looks like static array material. 
             else
                 # NM = muk\Reta*Rk*cc.Wbar*FMvec
                 NM = muk\RetaRk*cc.Wbar*FMvec
@@ -2204,7 +2485,10 @@ function shearflow_general_attempt(sections, Wbar, F, L, yc, zc)
 
     m = length(sections)
 
-    TF = get_section_floattype(sections[1])
+    TF, TF2 = get_section_floattype(sections[1]), typeof(Wbar[1])
+    TF3, TF4, TF5, TF6 = typeof(F[1]), typeof(L[1]), typeof(yc[1]), typeof(zc[1])
+    # @show TF, typeof(Wbar), typeof(F), typeof(L), typeof(yc), typeof(zc)
+    TF = promote_type(TF, TF2, TF3, TF4, TF5, TF6)
 
     qoy = 0.0
     qoz = 0.0
