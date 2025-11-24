@@ -232,3 +232,247 @@ soln could be any vector that is of appropriate length for the analysis method, 
 Need to pass in a PyPlot object as PyPlot is not loaded by this package.
 """
 function plotsoln(::CompositeSectionAnalysis, soln, pyplot) end
+
+
+
+
+
+##### Damage calculation functions ##### 
+
+"""
+    damage_equivalent_load(loads; m=10)
+Damage equivalent load from the MLife theory, without using the Goodman correction.
+
+**Arguments**
+    loads - the an array of loads, whether they be forces, moments or stresses
+    m - the Whöler exponent, which is typically 10 for composites
+
+**Outputs**
+    DEL - Damage equivalent load
+"""
+function damage_equivalent_load(loads; m=10, Lult=maximum(abs.(out[1,:])), goodman::Bool=true)
+    peaks = get_peaks(loads) #Rainflow counting only cares about the turning points
+    out = rainflow(peaks) 
+    _, n = size(out)
+    
+    DEL = 0.
+    for i =1:n #Todo: Check that it follows the correct form (in the damage calculation below).
+        s = out[1, i] #Load range
+        smean = out[2, i] #Mean of the load range
+        N = out[3, i] #Number of cycles experienced
+
+        if goodman
+            S_goodman = s / (1 - (smean/Lult)) #Goodman correction
+        else
+            S_goodman = s
+        end
+
+        endurance = (Lult/S_goodman)^m #Endurance limit, or the number of cycles that can be experienced before failure.
+        damage += N/endurance #Damage from this cycle
+        
+        correctedloadrange = out[1,i]*(Lult/(Lult-abs(out[2,i]))) #Goodman correction
+        DEL += out[3,i]*(correctedloadrange^m)
+    end
+    DEL = (DEL/sum(out[3,:]))^(1/m)
+    return DEL
+end
+
+"""
+    damage(loads; m=10, Lult=maximum(abs.(loads)), uc_mult=0.5, goodman=true)
+
+Damage calculation using Miner's rule, using Goodman correction. 
+
+**Arguments**
+- `loads::Vector{TF}`: time series of loads (e.g., stress or strain) for a point on a cross section.
+- `m::Int`: S-N curve slope [opt, default=10]
+- `Lult::TF`: ultimate load for Goodman correction [opt, default=maximum(abs.(loads))]
+- `uc_mult::TF`: partial load scaling for rainflow counting [opt, default=0.5]
+- `goodman::Bool`: whether to use Goodman correction [opt, default=true]
+
+**Outputs**
+- `damage::TF`: cumulative damage at the cross section
+"""
+function damage(loads; m=10, Lult=maximum(abs.(loads)), uc_mult=0.5, goodman::Bool=true)
+    peaks = get_peaks(loads) #Rainflow counting only cares about the turning points
+    out = rainflow(peaks, uc_mult) 
+    _, n= size(out)
+
+    # TF = typeof(loads[1])
+
+    damage = 0. #Todo: Probably better typing needed. 
+
+    for i =1:n
+        s = out[1, i] #Load range
+        smean = out[2, i] #Mean of the load range
+        N = out[3, i] #Number of cycles experienced
+
+        if goodman
+            S_goodman = s / (1 - (smean/Lult)) #Goodman correction
+        else
+            S_goodman = s
+        end
+
+        endurance = (Lult/S_goodman)^m #Endurance limit, or the number of cycles that can be experienced before failure.
+        damage += N/endurance #Damage from this cycle
+    end
+    
+    return damage
+end
+
+"""
+    rainflow(array_ext, uc_mult=0.5)
+
+The ASTM 3 point Rainflow counting of a signal's turning points. 
+
+**Arguments**
+- array_ext (numpy.ndarray): array of turning points
+- uc_mult (float): partial-load scaling [opt, default=0.5]
+
+**Outputs**
+- array_out (numpy.ndarray): (3 x n_cycle) array of rainflow values:
+                    1) load range
+                    2) range mean
+                    3) cycle count
+"""
+function rainflow(array_ext, uc_mult=0.5)
+    tot_num = length(array_ext)             # total size of input array
+    array_out = zeros(typeof(array_ext[1]),(3, tot_num-1))    # initialize output array (initialized at max possible size, and then will be trimmed)
+    pr = 1                                  # index of input array
+    po = 1                                  # index of output array 
+    j = 0                                   # index of temporary array "a"
+    a  = zeros(typeof(array_ext[1]), tot_num)  # temporary array for algorithm #must be the vector of residues
+    # loop through each turning point stored in input array
+    for i = 1:tot_num
+        j += 1                  # increment "a" counter #Starts at i=j, but then falls behind. as it gets reduced. but eventually starts building up. 
+        a[j] = array_ext[pr]    # put turning point into temporary array #pr = i at this point
+        pr += 1                 # increment input array pointer #= i + 1
+        while j >= 3 && abs( a[j-1] - a[j-2]) <= abs(a[j] - a[j-1])
+            lrange = abs( a[j-1] - a[j-2] )
+            
+            if j == 3 # partial range
+                mean = (a[1] + a[2])/2
+                a[1] = a[2]
+                a[2] = a[3]
+                j = 2
+                if lrange > 0
+                    array_out[1,po] = lrange
+                    array_out[2,po] = mean
+                    array_out[3,po] = uc_mult
+                    po += 1
+                end
+            
+            else # full range
+                mean = (a[j-1] + a[j-2])/2
+                a[j-2] = a[j]
+                j = j-2
+                if (lrange > 0)
+                    array_out[1,po] = lrange
+                    array_out[2,po] = mean
+                    array_out[3,po] = 1.00
+                    po += 1
+                end
+            end
+        end
+        # @show array_out
+        # println("")
+    end
+
+    # partial range of the residuals
+    for i = 1:j-1
+        lrange    = abs(a[i] - a[i+1])
+        mean      = (a[i] + a[i+1])/2
+        if lrange > 0
+            array_out[1,po] = lrange
+            array_out[2,po] = mean
+            array_out[3,po] = uc_mult
+            po += 1
+        end
+    end
+    # get rid of unused entries
+    out = array_out[:,1:po-1]
+    return out
+end
+
+
+
+"""
+    get_peaks(array)
+
+Get the turning point values of a signal.
+
+**Arguments**
+- `array::Array{TF}`: the signal to find the turning points, or peaks
+
+**Returns**
+- `peaks::Array{TF}`: values of the turning points in the input array
+"""
+function get_peaks(array)
+    A = array[:]
+    # get rid of any zero slope in the beginning
+    while A[2] == A[1]
+        A = A[2:length(A)]
+    end
+    peaks = [A[1]]
+    if A[2] > A[1]
+        slope = "p"
+    elseif A[2] < A[1]
+        slope = "m"
+    end
+    for i = 1:length(A)-2
+        ind = i+1
+        if slope == "p"
+            if A[ind+1] < A[ind]
+                peaks = append!(peaks,A[ind])
+                slope = "m"
+            end
+        elseif slope == "m"
+            if A[ind+1] > A[ind]
+                peaks = append!(peaks,A[ind])
+                slope = "p"
+            end
+        end
+    end
+    peaks = append!(peaks,A[length(A)])
+    return peaks
+end
+
+"""
+    get_peaks_indices(array)
+
+Return the indices of the signal peaks. 
+
+**Arguments** 
+- `array::Array{TF}`: the signal to find the turning points, or peaks
+
+**Returns**
+- `peaks::Array{Int}`: indices of the turning points in the input array
+"""
+function get_peaks_indices(array)
+    A = array[:]
+    # get rid of any zero slope in the beginning
+    while A[2] == A[1]
+        A = A[2:length(A)]
+    end
+    peaks = [1]
+    if A[2] > A[1]
+        slope = "p"
+    elseif A[2] < A[1]
+        slope = "m"
+    end
+    for i = 1:length(A)-2
+        ind = i+1
+        if slope == "p"
+            if A[ind+1] < A[ind]
+                peaks = append!(peaks,ind)
+                slope = "m"
+            end
+        elseif slope == "m"
+            if A[ind+1] > A[ind]
+                peaks = append!(peaks,ind)
+                slope = "p"
+            end
+        end
+    end
+    peaks = append!(peaks,length(A))
+    return peaks
+end

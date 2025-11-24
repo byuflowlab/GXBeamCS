@@ -504,7 +504,7 @@ function get_beam_sections(x, y, chord, twist, paxis, xbreak, weblocs, segments,
     # @show floattype <: ReverseDiff.TrackedReal
     # vectortype = Vector{floattype}
     # vectortype = AbstractVector{floattype}
-    if floattype <: ReverseDiff.TrackedReal
+    if floattype <: ReverseDiff.TrackedReal #Todo: I feel like there should be a better way to do this. 
         sections = Vector{BeamSection{layertype, ReverseDiff.TrackedArray{Float64, Float64, 1, Vector{Float64}, Vector{Float64}}}}(undef, ns) 
         # sections = Vector{BeamSection{layertype, Vector{ReverseDiff.TrackedReal{Float64, Float64, ReverseDiff.TrackedArray{Float64, Float64, 1, Vector{Float64}, Vector{Float64}}}}}}(undef, ns) 
     else

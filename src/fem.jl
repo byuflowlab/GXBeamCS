@@ -1334,7 +1334,7 @@ end
                 xbar = sum([n.x/4 for n in nodes_local])
                 ybar = sum([n.y/4 for n in nodes_local])
 
-                cb, sb = GXBeam.element_orientation(nodes_local)
+                cb, sb = element_orientation(nodes_local)
     
                 seriescolor --> :orange
                 linewidth --> 2

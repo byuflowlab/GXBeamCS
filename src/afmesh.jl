@@ -1060,10 +1060,10 @@ end
 function mesh_box(w, h, tt, tb, tl, tr, nw, nh)
 
     ### Create edges #todo: A way that might work to avoid the problem with mesh not lining up is have the range start from t and go to x-t. But then create_edge would have to be modified. 
-    xy1, nn1 = GXBeamCS.create_edge(w, tb, nw; xstart=tl, xstop=w-tr) #Bottom
-    xy2, nn2 = GXBeamCS.create_edge(h-(tb+tt), tl, nh; swap=true, boxbeam=false) # Left
-    xy3, nn3 = GXBeamCS.create_edge(h-(tb+tt), tr, nh; swap=true, boxbeam=false) #Right
-    xy4, nn4 = GXBeamCS.create_edge(w, tt, nw; xstart=tl, xstop=w-tr) #Top
+    xy1, nn1 = create_edge(w, tb, nw; xstart=tl, xstop=w-tr) #Bottom
+    xy2, nn2 = create_edge(h-(tb+tt), tl, nh; swap=true, boxbeam=false) # Left
+    xy3, nn3 = create_edge(h-(tb+tt), tr, nh; swap=true, boxbeam=false) #Right
+    xy4, nn4 = create_edge(w, tt, nw; xstart=tl, xstop=w-tr) #Top
 
     ### Shift the edges 
     xy2[:,2] .+= tb #Left up
