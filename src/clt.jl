@@ -1048,7 +1048,23 @@ end
 
 
 
-function compliance_matrix(clt::CLT, shear_center=true)
+compliance_matrix(clt::CLT, shear_center=true) = _compliance_core!(clt, shear_center, nothing)
+
+"""
+    _compliance_core!(clt::CLT, shear_center, collect)
+
+Shared traversal behind [`compliance_matrix`](@ref) and [`compliance_and_operators`](@ref).
+
+`collect` is either `nothing` (plain compliance evaluation) or an `OperatorStash`, in which
+case the per-section laminate compliance and per-element geometry needed to assemble the
+load->strain operators are captured as we go, for the requested elements only. The
+`collect === nothing` branches are eliminated at specialization time, so the plain path is
+unaffected.
+
+Every arithmetic expression here must stay byte-identical to what `compliance_matrix`
+computed before the refactor -- `test/clt_operators.jl` asserts exact equality.
+"""
+function _compliance_core!(clt::CLT, shear_center, collect::C) where {C}
 
     m = length(clt.sections) #number of sections
 
@@ -1070,14 +1086,18 @@ function compliance_matrix(clt::CLT, shear_center=true)
         atinv = (a[2, 2]*a[3, 3] - a[2, 3]^2) / det(a)
         # Atilde = inv(atilde)  # TODO: we only need (1, 1) component so don't need to invert everything
 
+        _stash_section!(collect, i, alpha, beta, delta)
+
         for k = 2:n #Iterate over the "elements" in the section
             ybar = (yp[k-1] + yp[k])/2 #The element midpoint
             zbar = (zp[k-1] + zp[k])/2
             b = sqrt((yp[k] - yp[k-1])^2 + (zp[k] - zp[k-1])^2) #The length of the element
             ca = (yp[k] - yp[k-1])/b #The cosine of the angle of the element #Todo: Will this correctly orient elements? Check the math.
             sa = (zp[k] - zp[k-1])/b #The sine of the angle of the element
-            #Add the element area to the cross section area #TODO: Wait... A is reset at the beginning of the function, so this is like the cumulative area of all the sections? 
+            #Add the element area to the cross section area #TODO: Wait... A is reset at the beginning of the function, so this is like the cumulative area of all the sections?
             A += 0.5*(zp[k-1] + zp[k]) * (yp[k-1] - yp[k])  # if closed section (trapezoid formula for polygon area: https://en.wikipedia.org/wiki/Shoelace_formula)
+
+            _stash_element!(collect, i, k-1, ybar, zbar, b, ca, sa)
 
             Rk = [1.0 zbar ybar 0.0;
                 0.0 ca -sa 0.0;
@@ -1166,6 +1186,521 @@ function compliance_matrix(clt::CLT, shear_center=true)
 
     # s, S, ysc, zsc = shearflow(sections, Wbar, F, L, yc, zc)
     return Sfull, sc, tc
+end
+
+
+# ---------------------------------------------------------------------------
+# Load -> strain/stress operators
+#
+# Classical laminate theory makes the ply strain/stress at a location an exact linear
+# function of the applied internal section loads, so for a fixed cross section there is a
+# fixed 4-column operator B with
+#
+#     output_at_location = B * FMvec,    FMvec = [F[1], M[2], -M[3], M[1]]
+#
+# `strains_and_stresses` rebuilds that operator on every call. Building it once turns a
+# whole load history into a single matrix multiply.
+# ---------------------------------------------------------------------------
+
+"""
+Float type wide enough to hold the operator entries: covers the cached section quantities,
+the laminate properties, and the section coordinates, so AD duals entering through any of
+them are represented.
+"""
+function clt_operator_floattype(clt::CLT)
+    return promote_type(eltype(clt.cache.Wbar), eltype(clt.sections[1].laminate[1]),
+                        typeof(clt.sections[1].y[1]), typeof(clt.sections[1].z[1]))
+end
+
+
+# ---------------- strain-location addressing ----------------
+#
+# The flattening matches `num_strain_locs` and `strains_and_stresses`: iterate sections, then
+# elements `k = 2:n` (element `e = k-1`), then `2*length(sec.laminate)` locations per element
+# (two through-thickness faces per ply, in `zspacingdouble` order).
+#
+# NOTE: this is a *different* index space from `count_clt_elements`/`find_section_layer`,
+# which flatten layer-major over elements. Do not mix them; they would mis-attribute plies.
+
+"""
+    strain_loc_index(clt::CLT, section, element, ply, face) -> Int
+
+Global strain-evaluation index of a location, i.e. the column of the
+`strains_and_stresses` output arrays.
+
+`element` is `1:length(sec.y)-1`, `ply` is `1:length(sec.laminate)`, and `face` is `1` or `2`
+for the two through-thickness faces of the ply. `face == 1` is the `zspacingdouble` entry
+`2*ply-1` (the lower-`z` face), so a section's `face == 1` locations are its `1:2:N`.
+"""
+function strain_loc_index(clt::CLT, section, element, ply, face)
+    m = length(clt.sections)
+    (1 <= section <= m) || throw(ArgumentError("section $section outside 1:$m"))
+    sec = clt.sections[section]
+    ne = length(sec.y) - 1
+    nply = length(sec.laminate)
+    (1 <= element <= ne) || throw(ArgumentError("element $element outside 1:$ne for section $section"))
+    (1 <= ply <= nply) || throw(ArgumentError("ply $ply outside 1:$nply for section $section"))
+    (1 <= face <= 2) || throw(ArgumentError("face must be 1 or 2, got $face"))
+
+    offset = 0
+    for i = 1:section-1
+        offset += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+    return offset + (element - 1)*2*nply + 2*(ply - 1) + face
+end
+
+
+"""
+    strain_loc_tuple(clt::CLT, idx) -> (section, element, ply, face)
+
+Inverse of [`strain_loc_index`](@ref).
+"""
+function strain_loc_tuple(clt::CLT, idx)
+    ntotal = num_strain_locs(clt)
+    (1 <= idx <= ntotal) || throw(ArgumentError("strain location $idx outside 1:$ntotal"))
+
+    remaining = idx
+    for i in eachindex(clt.sections)
+        sec = clt.sections[i]
+        nply = length(sec.laminate)
+        nblock = (length(sec.y) - 1) * 2*nply
+        if remaining <= nblock
+            local_idx = remaining - 1
+            element = div(local_idx, 2*nply) + 1
+            within = mod(local_idx, 2*nply)
+            ply = div(within, 2) + 1
+            face = mod(within, 2) + 1
+            return (i, element, ply, face)
+        end
+        remaining -= nblock
+    end
+    error("unreachable")  # bounds already checked
+end
+
+
+"""
+    strain_loc_indices(clt::CLT, section) -> UnitRange{Int}
+
+Global strain-evaluation indices belonging to `section`.
+"""
+function strain_loc_indices(clt::CLT, section)
+    m = length(clt.sections)
+    (1 <= section <= m) || throw(ArgumentError("section $section outside 1:$m"))
+    offset = 0
+    for i = 1:section-1
+        offset += (length(clt.sections[i].y) - 1) * 2*length(clt.sections[i].laminate)
+    end
+    sec = clt.sections[section]
+    nblock = (length(sec.y) - 1) * 2*length(sec.laminate)
+    return (offset + 1):(offset + nblock)
+end
+
+
+"""
+    resolve_strain_locs(clt::CLT, nodes) -> Vector{Int}
+
+Normalize a location specification to global indices. `nodes` may be integers (indices into
+`1:num_strain_locs(clt)`) or `(section, element, ply, face)` tuples.
+"""
+function resolve_strain_locs(clt::CLT, nodes)
+    ntotal = num_strain_locs(clt)
+    idxs = Vector{Int}(undef, length(nodes))
+    for (i, node) in enumerate(nodes)
+        if node isa Integer
+            (1 <= node <= ntotal) || throw(ArgumentError("strain location $node outside 1:$ntotal"))
+            idxs[i] = node
+        elseif node isa Tuple && length(node) == 4
+            idxs[i] = strain_loc_index(clt, node...)
+        else
+            throw(ArgumentError("cannot interpret strain location $node; expected an Int or a " *
+                                "(section, element, ply, face) tuple"))
+        end
+    end
+    return idxs
+end
+
+
+# ---------------- the operator bundle ----------------
+
+const OPERATOR_FIELDS = (:strain_b, :stress_b, :strain_p, :stress_p)
+
+"""
+    StrainOperatorSet
+
+Linear load -> strain/stress operators for a set of strain-evaluation locations of one cross
+section, as produced by [`compliance_and_operators`](@ref).
+
+Each field is stored **pre-concatenated** as a `(4, 6*nloc)` matrix so that evaluating a
+batch of load cases is a single matrix multiply (see [`strains_stresses_from_B`](@ref)).
+Column `(j-1)*nloc + i` holds component `j` of location `i`, which is what makes
+`reshape(FM*B, nload, nloc, 6)` correct without a permutation. Fields not requested via the
+`outputs` keyword are `nothing`.
+
+Use [`node_operator`](@ref) to recover the 6x4 operator of a single location.
+
+# Fields
+- `nodes::Vector{Int}`: global strain-location indices, in the order requested.
+- `strain_b`, `stress_b`: strain/stress in beam coordinates (`xx, yy, zz, xy, xz, yz`).
+- `strain_p`, `stress_p`: strain/stress in ply coordinates (`11, 22, 33, 12, 13, 23`).
+"""
+struct StrainOperatorSet{TF, TN<:AbstractVector{<:Integer}}
+    nodes::TN
+    strain_b::Union{Matrix{TF}, Nothing}
+    stress_b::Union{Matrix{TF}, Nothing}
+    strain_p::Union{Matrix{TF}, Nothing}
+    stress_p::Union{Matrix{TF}, Nothing}
+end
+
+Base.length(Bs::StrainOperatorSet) = length(Bs.nodes)
+
+"""
+    operator_fields(Bs::StrainOperatorSet) -> Tuple
+
+Which output fields were built.
+"""
+operator_fields(Bs::StrainOperatorSet) = filter(f -> getfield(Bs, f) !== nothing, OPERATOR_FIELDS)
+
+function Base.show(io::IO, Bs::StrainOperatorSet{TF}) where {TF}
+    print(io, "StrainOperatorSet{$TF}(", length(Bs), " locations, outputs=",
+          operator_fields(Bs), ")")
+end
+
+"""
+    node_operator(Bs::StrainOperatorSet, i, field) -> 6x4 matrix
+
+Operator for the `i`th requested location, so that the `strains_and_stresses` output there
+equals `node_operator(Bs, i, field) * [F[1], M[2], -M[3], M[1]]`.
+"""
+function node_operator(Bs::StrainOperatorSet, i, field::Symbol)
+    (field in OPERATOR_FIELDS) || throw(ArgumentError("unknown output field $field; expected one of $OPERATOR_FIELDS"))
+    B = getfield(Bs, field)
+    B === nothing && throw(ArgumentError("field $field was not built; this set has outputs=$(operator_fields(Bs))"))
+    nloc = length(Bs)
+    (1 <= i <= nloc) || throw(ArgumentError("location $i outside 1:$nloc"))
+    return transpose(view(B, :, i:nloc:6*nloc))
+end
+
+
+# ---------------- data captured during the compliance traversal ----------------
+
+"""
+    OperatorStash
+
+Per-section laminate compliance and per-element geometry captured during
+[`_compliance_core!`](@ref), for the elements that own a requested strain location. These
+are exactly the load-independent ingredients the operators need, so they come for free from
+the compliance traversal rather than a second pass over the geometry.
+"""
+struct OperatorStash{TF}
+    want_section::Vector{Bool}
+    want_element::Vector{Vector{Bool}}
+    abd::Vector{NTuple{3, Matrix{TF}}}                  # per section: alpha, beta, delta
+    geom::Dict{Tuple{Int,Int}, NTuple{5, TF}}           # (section, element) -> ybar, zbar, b, ca, sa
+end
+
+function OperatorStash(clt::CLT, idxs)
+    TF = clt_operator_floattype(clt)
+    m = length(clt.sections)
+
+    want_section = fill(false, m)
+    want_element = [fill(false, length(clt.sections[i].y) - 1) for i = 1:m]
+    for idx in idxs
+        i, e, _, _ = strain_loc_tuple(clt, idx)
+        want_section[i] = true
+        want_element[i][e] = true
+    end
+
+    empty3 = () -> (zeros(TF, 0, 0), zeros(TF, 0, 0), zeros(TF, 0, 0))
+    abd = [empty3() for _ = 1:m]
+    return OperatorStash{TF}(want_section, want_element, abd,
+                             Dict{Tuple{Int,Int}, NTuple{5, TF}}())
+end
+
+# no-op when the caller only wants the compliance matrix (branch is removed at specialization)
+@inline _stash_section!(::Nothing, i, alpha, beta, delta) = nothing
+@inline _stash_element!(::Nothing, i, e, ybar, zbar, b, ca, sa) = nothing
+
+@inline function _stash_section!(st::OperatorStash{TF}, i, alpha, beta, delta) where {TF}
+    if st.want_section[i]
+        st.abd[i] = (Matrix{TF}(alpha), Matrix{TF}(beta), Matrix{TF}(delta))
+    end
+    return nothing
+end
+
+@inline function _stash_element!(st::OperatorStash{TF}, i, e, ybar, zbar, b, ca, sa) where {TF}
+    if st.want_element[i][e]
+        st.geom[(i, e)] = (TF(ybar), TF(zbar), TF(b), TF(ca), TF(sa))
+    end
+    return nothing
+end
+
+
+# ---------------- fused compliance + operators ----------------
+
+"""
+    compliance_and_operators(clt::CLT, nodes; shear_center=true, outputs=(:strain_b, :stress_b, :strain_p, :stress_p))
+
+Compute the 6x6 section compliance and the linear load -> strain/stress operators at the
+requested strain-evaluation locations, in a single traversal of the cross section.
+
+`Sfull, sc, tc` are identical to [`compliance_matrix`](@ref) (same traversal, same
+expressions), and `clt.cache` is populated the same way -- so this also removes the ordering
+hazard that `strains_and_stresses` has today, where it silently requires `compliance_matrix`
+to have run first.
+
+Evaluate the operators with [`strains_stresses_from_B`](@ref).
+
+# Arguments
+- `clt::CLT`
+- `nodes`: strain locations, either global indices into `1:num_strain_locs(clt)` or
+  `(section, element, ply, face)` tuples. Operators are returned in this order.
+
+# Keywords
+- `shear_center`: as in `compliance_matrix`.
+- `outputs`: which of `:strain_b, :stress_b, :strain_p, :stress_p` to build. Building only
+  what is needed cuts storage and evaluation cost proportionally (fatigue typically needs
+  only `:strain_p`).
+
+# Returns
+`(Sfull, sc, tc, Bs::StrainOperatorSet)`.
+
+# Example
+```julia
+locs = 1:2:num_strain_locs(clt)                       # first face of every ply
+S, sc, tc, Bs = compliance_and_operators(clt, locs; outputs=(:strain_p,))
+out = strains_stresses_from_B(Fhistory, Mhistory, clt, Bs)   # (nload, nloc, 6)
+axial = @view out.strain_p[:, :, 1]
+```
+"""
+function compliance_and_operators(clt::CLT, nodes; shear_center=true,
+                                  outputs=OPERATOR_FIELDS)
+    for f in outputs
+        (f in OPERATOR_FIELDS) || throw(ArgumentError("unknown output $f; expected a subset of $OPERATOR_FIELDS"))
+    end
+    isempty(outputs) && throw(ArgumentError("`outputs` is empty; nothing to build"))
+
+    idxs = resolve_strain_locs(clt, nodes)
+    stash = OperatorStash(clt, idxs)
+
+    Sfull, sc, tc = _compliance_core!(clt, shear_center, stash)
+    Bs = _assemble_operators(clt, idxs, stash, outputs)
+
+    return Sfull, sc, tc, Bs
+end
+
+
+# The cached section quantities carry ReverseDiff tracked reals in the AD path, where the
+# structured-matrix solves fall over; mirror what `strains_and_stresses` does and densify.
+_dense_if_tracked(X) = isa(first(X), ReverseDiff.TrackedReal) ? Matrix(X) : X
+
+
+function _assemble_operators(clt::CLT, idxs, stash::OperatorStash, outputs)
+    TF = clt_operator_floattype(clt)
+    cc = clt.cache
+    nloc = length(idxs)
+
+    alloc(field) = field in outputs ? zeros(TF, 4, 6*nloc) : nothing
+    Bstrain_b = alloc(:strain_b)
+    Bstress_b = alloc(:stress_b)
+    Bstrain_p = alloc(:strain_p)
+    Bstress_p = alloc(:stress_p)
+
+    # TODO(near-singular cc.F): swap for a regularized solve (truncated SVD / Tikhonov) if
+    # this ever throws. On the real turbine cross sections det(cc.F) ~ 1e-9, and `\` routes
+    # through `factorize`, which for an exactly diagonal cc.F picks a Diagonal solve that can
+    # throw SingularException on a zero pivot.
+    G = cc.F \ cc.L                                  # 2x4
+    Wbar = _dense_if_tracked(cc.Wbar)
+
+    # group requested locations by the element that owns them, so each element's operator
+    # chain is built exactly once
+    groups = Dict{Tuple{Int,Int}, Vector{NTuple{3,Int}}}()   # (section, element) -> [(column, ply, face)]
+    for (col, idx) in enumerate(idxs)
+        i, e, p, f = strain_loc_tuple(clt, idx)
+        push!(get!(() -> NTuple{3,Int}[], groups, (i, e)), (col, p, f))
+    end
+
+    for i in eachindex(clt.sections)
+        stash.want_section[i] || continue
+        sec = clt.sections[i]
+        alpha, beta, delta = stash.abd[i]
+
+        muk_raw = Symmetric([alpha[1, 1] beta[1, 1] beta[1, 3];
+                             beta[1, 1] delta[1, 1] delta[1, 3];
+                             beta[1, 3] delta[1, 3] delta[3, 3]])
+        muk = _dense_if_tracked(muk_raw)
+        nuk = [alpha[1, 3] beta[1, 2];
+               beta[3, 1] delta[1, 2];
+               beta[3, 3] delta[2, 3]]
+
+        C = [alpha beta; transpose(beta) delta]      # 6x6, as in `laminatestrains`
+        zvec = zspacingdouble(sec.laminate)
+
+        # per-ply rotations; `Qbar` is cheap and each ply is generally hit by several locations
+        plyops = [Qbar(lam) for lam in sec.laminate]
+
+        for e in eachindex(stash.want_element[i])
+            group = get(groups, (i, e), nothing)
+            group === nothing && continue
+            ybar, zbar, _, ca, sa = stash.geom[(i, e)]   # element length does not enter B
+
+            # eta = 0: evaluate at the element midpoint, matching `strains_and_stresses`
+            RetaRk = TF[one(TF) zbar ybar zero(TF);
+                        zero(TF) ca -sa zero(TF);
+                        zero(TF) zero(TF) zero(TF) -2*one(TF)]
+
+            # section-force operator: forces = A_f * FMvec, order N1, N2, N12, M1, M2, M12
+            A_f = zeros(TF, 6, 4)
+            if clt.closed_section
+                P1 = (G * Wbar)                                     # 2x4
+                P2 = (muk \ (RetaRk - nuk*G)) * Wbar                # 3x4
+                A_f[1, :] .= P2[1, :]
+                A_f[3, :] .= P1[1, :]
+                A_f[4, :] .= P2[2, :]
+                A_f[5, :] .= P1[2, :]
+                A_f[6, :] .= P2[3, :]
+            else
+                Po = (muk \ RetaRk) * Wbar                          # 3x4
+                A_f[1, :] .= Po[1, :]
+                A_f[4, :] .= Po[2, :]
+                A_f[6, :] .= Po[3, :]
+            end
+
+            CA = C * A_f                                            # 6x4: [epsilonbar; kappa] operator
+            Tsigma2, Teps2 = clt_Talpha(ca, sa)
+
+            for (col, p, f) in group
+                z = zvec[2*(p - 1) + f]
+                Q, Ts, Te = plyops[p]
+
+                # ply strain in laminate axes at through-thickness z: epsilonbar + kappa*z
+                E_op = CA[1:3, :] .+ z .* CA[4:6, :]                # 3x4, cf. epsilonprime
+                sigmap_op = Q * E_op                                # 3x4, cf. sigmaprime
+
+                # ply coordinates: rotate by the ply angle, rows 11, 22, 12 -> 1, 2, 4
+                if Bstrain_p !== nothing
+                    _store_op3!(Bstrain_p, col, nloc, transpose(Ts) * E_op)
+                end
+                if Bstress_p !== nothing
+                    _store_op3!(Bstress_p, col, nloc, transpose(Te) * sigmap_op)
+                end
+
+                # beam coordinates: embed the laminate-axis quantities in rows 1, 2, 4 of a
+                # 6-vector and rotate by the element angle
+                if Bstrain_b !== nothing
+                    _store_op6!(Bstrain_b, col, nloc, Teps2 * _embed6(E_op, TF))
+                end
+                if Bstress_b !== nothing
+                    _store_op6!(Bstress_b, col, nloc, Tsigma2 * _embed6(sigmap_op, TF))
+                end
+            end
+        end
+    end
+
+    return StrainOperatorSet{TF, typeof(idxs)}(idxs, Bstrain_b, Bstress_b, Bstrain_p, Bstress_p)
+end
+
+
+"""
+Place the 3 rows of a `(11, 22, 12)` operator into rows `(1, 2, 4)` of a 6-row block.
+"""
+function _embed6(X, ::Type{TF}) where {TF}
+    out = zeros(TF, 6, 4)
+    out[1, :] .= X[1, :]
+    out[2, :] .= X[2, :]
+    out[4, :] .= X[3, :]
+    return out
+end
+
+# scatter a 6x4 operator into the concatenated storage (column (j-1)*nloc + col holds
+# component j of location col)
+@inline function _store_op6!(B, col, nloc, op)
+    for j = 1:6
+        for r = 1:4
+            B[r, (j - 1)*nloc + col] = op[j, r]
+        end
+    end
+    return nothing
+end
+
+# same, for a `(11, 22, 12)` operator whose rows land in components 1, 2 and 4
+@inline function _store_op3!(B, col, nloc, op)
+    for (j, jrow) in enumerate((1, 2, 4))
+        for r = 1:4
+            B[r, (jrow - 1)*nloc + col] = op[j, r]
+        end
+    end
+    return nothing
+end
+
+
+# ---------------- batched evaluation ----------------
+
+"""
+    strains_stresses_from_B(F, M, clt::CLT, Bs::StrainOperatorSet) -> NamedTuple
+
+Evaluate strains and stresses at the locations described by `Bs`, for one or many load cases,
+as a single matrix multiply per output field.
+
+# Arguments
+- `F`, `M`: internal section forces and moments. Either 3-vectors for a single load case, or
+  `(nload, 3)` matrices with **one load case per row**.
+- `clt`: used to validate that `Bs` belongs to this cross section.
+- `Bs`: operators from [`compliance_and_operators`](@ref).
+
+# Returns
+NamedTuple with fields `strain_b, stress_b, strain_p, stress_p`. Each requested field is
+`(nload, nloc, 6)` for a batch, or `(nloc, 6)` for a single load case; fields that were not
+built are `nothing`. Component order matches `strains_and_stresses`: beam coordinates are
+`xx, yy, zz, xy, xz, yz` and ply coordinates are `11, 22, 33, 12, 13, 23`, with only
+components 1, 2 and 4 populated.
+"""
+function strains_stresses_from_B(F, M, clt::CLT, Bs::StrainOperatorSet)
+    ntotal = num_strain_locs(clt)
+    for idx in Bs.nodes
+        (1 <= idx <= ntotal) || throw(ArgumentError(
+            "operator set refers to strain location $idx, but this CLT has only $ntotal; " *
+            "`Bs` was built for a different cross section"))
+    end
+
+    single = ndims(F) == 1
+    FM = _assemble_FM(F, M)
+    nload = size(FM, 1)
+    nloc = length(Bs)
+
+    function evaluate(field)
+        B = getfield(Bs, field)
+        B === nothing && return nothing
+        out = reshape(FM * B, nload, nloc, 6)
+        return single ? reshape(out, nloc, 6) : out
+    end
+
+    return (; strain_b = evaluate(:strain_b), stress_b = evaluate(:stress_b),
+              strain_p = evaluate(:strain_p), stress_p = evaluate(:stress_p))
+end
+
+
+"""
+Build the `(nload, 4)` internal load matrix `[Nxbar Mybar Mzbar Txbar]` from GXBeam-ordered
+`F` and `M`. The internal sign convention negates `M[3]`; folding that in here means callers
+pass natural `(F, M)`. Shear deformation is neglected by this method, so `F[2]` and `F[3]`
+do not enter.
+"""
+function _assemble_FM(F, M)
+    if ndims(F) == 1
+        (ndims(M) == 1 && length(F) == 3 && length(M) == 3) || throw(DimensionMismatch(
+            "expected 3-element F and M for a single load case, got $(size(F)) and $(size(M))"))
+        return [F[1] M[2] -M[3] M[1]]
+    end
+
+    (ndims(F) == 2 && ndims(M) == 2) || throw(DimensionMismatch(
+        "F and M must both be 3-vectors or both be (nload, 3) matrices, got $(size(F)) and $(size(M))"))
+    size(F) == size(M) || throw(DimensionMismatch(
+        "F and M must have the same size, got $(size(F)) and $(size(M))"))
+    size(F, 2) == 3 || throw(DimensionMismatch(
+        "batched F and M must be (nload, 3) -- one load case per row -- got $(size(F))"))
+
+    return hcat(view(F, :, 1), view(M, :, 2), -view(M, :, 3), view(M, :, 1))
 end
 
 

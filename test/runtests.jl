@@ -8,4 +8,6 @@ using Test
     # include("clt.jl")
 
     include("meshtools.jl")
+
+    include("clt_operators.jl")
 end
