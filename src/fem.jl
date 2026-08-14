@@ -734,6 +734,167 @@ function compliance_matrix(fem::FEM, shear_center=true)
 end
 
 """
+    uncached_compliance_matrix(fem, shear_center=true)
+
+Compute compliance matrix given a finite element mesh described by nodes and elements.
+
+# Arguments
+- `fem::FEM`: finite element description (nodes, elements, and cache)
+- `shear_center::Bool`: Indicates whether the compliance matrix should be provided about the
+    shear center
+
+# Returns
+- `S::Matrix`: compliance matrix
+- `sc::Vector{float}`: x, y location of shear center (location where a transverse/shear
+    force will not produce any torsion, i.e., beam will not twist)
+- `tc::Vector{float}`: x, y location of tension center, aka elastic center, aka centroid
+    (location where an axial force will not produce any bending, i.e., beam will remain
+    straight)
+"""
+function uncached_compliance_matrix(fem, shear_center=true)
+
+    (; elements, nodes, cache) = fem
+
+    # problem dimensions
+    ne = length(elements) # number of elements
+    nn = length(nodes)    # number of nodes
+    ndof = 3 * nn         # 3 displacement dof per node
+
+    # reset global matrices
+    A = cache.A .= 0
+    R = cache.R .= 0
+    E = cache.E .= 0
+    C = cache.C .= 0
+    L = cache.L .= 0
+    M = cache.M .= 0
+
+    # storage for element node indices
+    idx = cache.idx
+
+    # place element matrices in global matrices (scatter)
+    for i = 1:ne
+        # element nodes
+        nodenum = elements[i].nodenum
+        # location in global matrix
+        node2idx!(idx, nodenum)
+        # element submatrix
+        Ae, Re, Ee, Ce, Le, Me = element_submatrix(elements[i], nodes[nodenum])
+        # add to global matrix
+        cache.A .+= Ae
+        @views cache.R[idx, :] .+= Re
+        @views cache.E[idx, idx] .+= Ee
+        @views cache.C[idx, idx] .+= Ce
+        @views cache.L[idx, :] .+= Le
+        @views cache.M[idx, idx] .+= Me
+    end
+
+    # --- Construct and Solve First Linear System --- #
+
+    # construct left hand side: Asys = [E R D; R' A 0 0; D' 0 0]
+    Asys = cache.Asys .= 0
+    Asys[1:ndof, 1:ndof] = E
+    Asys[1:ndof, ndof+1:ndof+6] = R
+    Asys[ndof+1:ndof+6, 1:ndof] = R'
+    Asys[ndof+1:ndof+6, ndof+1:ndof+6] = A
+    for i = 1:nn
+        s = 3*(i-1)
+        Asys[ndof+7, s+1] = Asys[s+1, ndof+7] = 1.0
+        Asys[ndof+8, s+2] = Asys[s+2, ndof+8] = 1.0
+        Asys[ndof+9, s+3] = Asys[s+3, ndof+9] = 1.0
+        Asys[ndof+10, s+3] = Asys[s+3, ndof+10] = nodes[i].y
+        Asys[ndof+11, s+3] = Asys[s+3, ndof+11] = -nodes[i].x
+        Asys[ndof+12, s+1] = Asys[s+1, ndof+12] = -nodes[i].y
+        Asys[ndof+12, s+2] = Asys[s+2, ndof+12] = nodes[i].x
+    end
+
+    # construct right hand side: Tr=zeros(6,6); Tr[1,5]=-1; Tr[2,4]=1; B2 = [0, Tr', 0];
+    B2 = cache.Bsys .= 0
+    B2[ndof+5, 1] = -1.0
+    B2[ndof+4, 2] =  1.0
+
+    # # solve linear system
+    # Afact, X2 = linearsolve(Asys, B2; X = cache.Xsys, Av = cache.Av, Bv = cache.Bv,
+    #     Xv = cache.Xv, Adot = cache.Adot, Bdot = cache.Bdot, Xdot = cache.Xdot)
+
+    X2 = hcat([ImplicitAD.implicit_linear(Asys, B2[:,k]) for k = 1:6]...)
+
+    # extract and save results
+    dX = cache.dX .= view(X2, 1:ndof, :)
+    dY = cache.dY .= view(X2, ndof+1:ndof+6, :)
+
+    # --- Construct and Solve Second Linear System --- #
+
+    # construct right hand side: B1 = [C'-C  L; -L' 0; 0 0]*[dX, dY] + [0, I, 0]
+    # (note that there are a couple errors in the BECAS theory guide for this expression)
+
+    B1 = cache.Bsys .= 0
+
+    mul!(view(B1, 1:ndof, :), C', dX, 1, 1)
+    mul!(view(B1, 1:ndof, :), C, dX, -1, 1)
+    mul!(view(B1, 1:ndof, :), L, dY, 1, 1)
+
+    B1[ndof+1, 1] = 1
+    B1[ndof+2, 2] = 1
+    B1[ndof+3, 3] = 1
+    B1[ndof+4, 4] = 1
+    B1[ndof+5, 5] = 1
+    B1[ndof+6, 6] = 1
+    mul!(view(B1, ndof+1:ndof+6, :), L', dX, -1, 1)
+
+    # solve linear system
+    # _, X1 = linearsolve(Asys, B1; Afact = Afact, X = cache.Xsys, Av = cache.Av, Bv = cache.Bv,
+    #     Xv = cache.Xv, Adot = cache.Adot, Bdot = cache.Bdot, Xdot = cache.Xdot)
+
+    X1 = hcat([ImplicitAD.implicit_linear(Asys, B1[:,k]) for k = 1:6]...)
+
+    # extract and save results
+    X = cache.X .= view(X1, 1:ndof, :)
+    Y = cache.Y .= view(X1, ndof+1:ndof+6, :)
+
+    # --- Compute Compliance Matrix --- #
+
+    # The following is equivalent to the following matrix operation
+    S = hcat(X', dX', Y')*[E C R; C' M L; R' L' A]*vcat(X, dX, Y)
+
+    # use state vector as temporary storage
+    # tmp1 = view(X1, 1:ndof, :)
+    # tmp2 = view(X1, ndof+1:ndof+6, :)
+
+    # S = zero(A)
+    # mul!(S, X', mul!(tmp1, E, X), 1, 1)
+    # mul!(S, X', mul!(tmp1, C, dX), 1, 1)
+    # mul!(S, mul!(tmp2, X', R), Y, 1, 1)
+    # mul!(S, dX', mul!(tmp1, C', X), 1, 1)
+    # mul!(S, dX', mul!(tmp1, M, dX), 1, 1)
+    # mul!(S, mul!(tmp2, dX', L), Y, 1, 1)
+    # mul!(S, Y', mul!(tmp2, R', X), 1, 1)
+    # mul!(S, Y', mul!(tmp2, L', dX), 1, 1)
+    # mul!(S, Y', mul!(tmp2, A, Y), 1, 1)
+
+    # --- Find Shear and Tension Center --- #
+
+    xs = -S[6, 2]/S[6, 6]
+    ys = S[6, 1]/S[6, 6]
+    xt = (S[4, 4]*S[5, 3] - S[4, 5]*S[4, 3])/(S[4, 4]*S[5, 5] - S[4, 5]^2)
+    yt = (-S[4, 3]*S[5, 5] + S[4, 5]*S[5, 3])/(S[4, 4]*S[5, 5] - S[4, 5]^2)
+    sc = [xs, ys]
+    tc = [xt, yt]
+
+    # compute properties about shear center
+    if shear_center
+        P = [0 0 ys; 0 0 -xs; -ys xs 0]
+        Hinv = [I transpose(P); zeros(3, 3) I]
+        HinvT = [I zeros(3, 3); P I]
+        S = Hinv * S * HinvT
+    end
+
+    # --- Change Ordering to Match GXBeam --- #
+    S = reorder(S)
+
+    return S, sc, tc
+end
+
+"""
     area_and_centroid_of_element(node)
 
 Compute area and centroid of an element specified by its four nodes
@@ -864,6 +1025,7 @@ end
     end
 
     #todo: show_nums
+    label --> false
 
     return x, y
 end
@@ -928,8 +1090,8 @@ end
                 xbar = sum([n.x/4 for n in nodes_local])
                 ybar = sum([n.y/4 for n in nodes_local])
 
-                cb, sb = GXBeam.element_orientation(nodes_local)
-
+                cb, sb = element_orientation(nodes_local)
+    
                 seriescolor --> :orange
                 linewidth --> 2
                 label --> false
@@ -947,6 +1109,10 @@ end
     #     end
     # end
 end
+
+
+
+
 
 """
     strains_and_stresses(F, M, fem::FEM)
@@ -1083,34 +1249,144 @@ function plotsoln(fem::FEM, soln, pyplot)
     pyplot.tripcolor(xpts, ypts, trisol, triangles=triangles)
 end
 
+@recipe function plot_sol_recipe(nodes::Array{T1, 1}, elements::Array{T2, 1}, soln::Array{T3, 1}, cgcolor;
+    shownodenums=false, showelemnums=false, shownodes=false, showorientation=false,
+    loval=minimum(soln), hival=maximum(soln), locol=:blue, hicol=:red) where {T1<:Node, T2<:MeshElement, T3}
 
-# function tsai_hill(sigma, strength)
+    # L = hival - loval
+    # vals = (soln .- loval) ./ L #mapped to zero and one. 
+    # vals = (soln .- loval) ./ L
+    # vals = round.(Int, (soln .- loval)./ (L).*255 .+ 1)
 
-#     (; S1t, S1c, S2t, S2c, S3t, S3c, S12, S13, S23) = strength
+    # cg = cgrad(cgcolor)
+    colorbar --> true
+    fill --> true
+    fc --> cgcolor
 
-#     _, ne = size(sigma)
-#     T = eltype(sigma)
-#     failure = Vector{T}(undef, n)  # fails if > 1
-#     s = Vector{T}(undef, 6)
+    ne = length(elements)
+    aspect_ratio --> :equal
 
-#     for i = 1:ne
-#         s .= sigma[:, i]
+    if showelemnums
+        xbarvec = Float64[]
+        ybarvec = Float64[]
+        annotation_labels = String[]
+    end
 
-#         if s[1] >= 0.0
-#             S1 = S1t
-#         else
-#             S1 = S1c
-#         end
-#         if s[2] >= 0.0
-#             S2 = S2t
-#         else
-#             S2 = S2c
-#         end
-#         failure[i] = s[1]^2/S1^2 + s[2]^2/S2^2 + s[4]^2/S12^2 - s[1]*s[2]/S1^2
-#     end
+    for i = 1:ne
+        @series begin
+            nodes_local = nodes[elements[i].nodenum]
+            xi = zeros(5)
+            yi = zeros(5)
 
-#     return failure
-# end
+            for i = 1:4
+                xi[i] = nodes_local[i].x
+                yi[i] = nodes_local[i].y
+                if i == 1
+                    xi[5] = nodes_local[i].x
+                    yi[5] = nodes_local[i].y
+                end
+            end
+
+            label --> false
+            seriescolor --> :black
+            if shownodes
+                markershape --> :x
+            end
+
+            # fill --> (0, 0.5, :green)
+            # fill --> (0, 0.5, cgrad([locol, hicol], vals[i])) #cgrad not defined
+            # if i==2
+            #     fill --> (0, 0.5, :green)
+            # else
+            #     fill --> (0, 0.5, :red)
+            # end
+
+            # fill --> (0, 0.8, cgcolor[vals[i]])
+
+            fill_z --> soln[i]
+            # if i in 4:6
+            #     fill_z --> soln[i]
+            # end
+
+            #Plot the element numbers
+            if showelemnums
+                
+            end
+
+            xi, yi
+        end
+
+        if showelemnums
+            nodes_local = nodes[elements[i].nodenum]
+            xbar = sum([n.x/4 for n in nodes_local])
+            ybar = sum([n.y/4 for n in nodes_local])
+
+            push!(xbarvec, xbar)
+            push!(ybarvec, ybar)
+            push!(annotation_labels, string(i))
+
+            annotations --> (xbarvec, ybarvec, annotation_labels)
+        end
+
+        if showorientation
+            @series begin
+                nodes_local = nodes[elements[i].nodenum]
+                xbar = sum([n.x/4 for n in nodes_local])
+                ybar = sum([n.y/4 for n in nodes_local])
+
+                cb, sb = element_orientation(nodes_local)
+    
+                seriescolor --> :orange
+                linewidth --> 2
+                label --> false
+                arrow --> true
+
+                [xbar, xbar+(cb/4)], [ybar, ybar+(sb/4)]
+            end
+        end
+    end
+
+    # if shownodenums #Todo: 
+    #     nn = length(nodes)
+    #     for i = 1:nn
+    #         annotate!(plt, nodes[i].x*1.1, nodes[i].y*1.1, string(i))
+    #     end
+    # end
+end
+
+"""
+    tsai_hill(stress_p, fem::FEM)
+
+Tsai-Hill failure criteria
+
+# Arguments
+- `stress_p::vector(6, ne)`: stresses in ply coordinate system
+- `fem::FEM`: finite element object
+
+# Returns
+- `failure::vector(ne)`: tsai-wu failure criteria for each element.  fails if >= 1
+"""
+function tsai_hill(sigma, fem::FEM)
+
+    elements = fem.elements
+
+    ne = length(elements)
+    T = eltype(sigma)
+    failure = Vector{T}(undef, ne)  # fails if > 1
+    s = Vector{T}(undef, 6)
+
+    @views for i = 1:ne
+        s .= sigma[:, i]
+        m = elements[i].material
+        S1 = s[1] >= 0.0 ? m.S1t : m.S1c
+        S2 = s[2] >= 0.0 ? m.S2t : m.S2c
+        S12 = m.S12
+        
+        failure[i] = s[1]^2/S1^2 + s[2]^2/S2^2 + s[4]^2/S12^2 - s[1]*s[2]/S1^2
+    end
+
+    return failure
+end
 
 """
     tsai_wu(stress_p, fem::FEM)
@@ -1148,6 +1424,48 @@ function tsai_wu(stress_p, fem::FEM)
                      s[1]*s[2]/sqrt(m.S1t*m.S1c*m.S2t*m.S2c) -
                      s[1]*s[3]/sqrt(m.S1t*m.S1c*m.S3t*m.S3c) -
                      s[2]*s[3]/sqrt(m.S2t*m.S2c*m.S3t*m.S3c)
+    end
+
+    return failure
+end
+
+
+"""
+    max_stress(stress_p, fem::FEM)
+
+Maximum stress failure criteria
+
+# Arguments
+- `stress_p::vector(6, ne)`: stresses in ply coordinate system
+- `fem::FEM`: finite element object
+
+# Returns
+- `failure::vector(6, ne)`: tsai-wu failure criteria for each element.  fails if >= 1
+"""
+function max_stress(stress_p, fem::FEM)
+
+    elements = fem.elements
+
+    ne = length(elements)
+    T = eltype(stress_p)
+    failure = Array{T, 2}(undef, 6, ne)  # fails if > 1
+    s = Vector{T}(undef, 6)
+
+    @views for i = 1:ne
+        m = elements[i].material
+        s .= stress_p[:, i]
+
+        S1 = s[1] >= 0.0 ? m.S1t : -m.S1c
+        S2 = s[2] >= 0.0 ? m.S2t : -m.S2c
+        S3 = s[3] >= 0.0 ? m.S3t : -m.S3c
+
+        failure[1, i] = s[1]/S1
+        failure[2, i] = s[2]/S2
+        failure[3, i] = s[3]/S3
+        failure[4, i] = sqrt((s[4]/m.S12)^2)
+        failure[5, i] = sqrt((s[5]/m.S13)^2)
+        failure[6, i] = sqrt((s[6]/m.S23)^2)
+
     end
 
     return failure

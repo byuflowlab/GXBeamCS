@@ -7,6 +7,8 @@ using FLOWMath
 using LinearAlgebra
 using DelimitedFiles
 using RecipesBase
+using ImplicitAD
+using ReverseDiff
 
 # from common
 export Material, MaterialPlane, Layer
@@ -22,6 +24,9 @@ export afmesh
 
 # from clt
 export BeamSection, CLT, clt_stiffness_matrix
+export compliance_and_operators, strains_stresses_from_B, StrainOperatorSet
+export num_strain_locs, node_operator, operator_fields
+export strain_loc_index, strain_loc_tuple, strain_loc_indices
 
 # shared definitions and functions
 include("common.jl")
@@ -34,5 +39,8 @@ include("afmesh.jl")
 
 # section properties using classical laminate theory
 include("clt.jl")
+
+# meshing tools
+include("meshtools.jl")
 
 end
